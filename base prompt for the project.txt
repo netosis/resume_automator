@@ -1,0 +1,33 @@
+I want you to help design me a Generative AI tool that will help apply jobs. The job portals that I am looking to apply for are Naukri, Indeed, GlassDoor, Workday, FoundIt, Shine.com.(If all are not possible then atleast Naukri, Indeed and GlassDoor are must). 
+The plan is to upload the resume once. Pass the resume to LLM to extract basic information about the user, their experience and what their expertise are. Also the model should be able to extract the years of experience the, name, phone number(if given), portfolio links if any. Once the basic details are parsed. The model should provide what roles the user is eligible for and has high percentage of changes for. 
+
+Once the Resume parsing is done there should be an option there should be a few options. 
+1. One option should be to be able to upload job links to the tool.
+2. Select the portals where the user wants to apply jobs on (here the user can select multiple portals, only upto three portals)
+
+If first option is selected then the tool should be able to scrape the Job description from the website and then modify the resume accordingly with required key words that align with the user's profile (according to the resume) and also a few points that can be exaggerated a little or a few skills that are easy/quick to learn with the current expertise/experience can also be added and notified to the user so that the user is able to prepare for the interview accordingly. Once the resume is modified, it should be saved within a new folder. 
+
+The directory structure would be as follows:
+Job Portal Name
+|
+Company Name
+|
+Position name
+|
+Resume.pdf
+
+This structure should be Followed.
+
+
+How to edit the resume:
+1. When the resume is uploaded it should be first thing to be done is a .tex to be created for editing the resume. There would be a base format that will be followed while re-formatting the resume. The LLM should use the format to fill all the information within that base latex file. Make sure to store that .tex file in the base directory. This resulting latex file will be used to modify with the specific job descriptions. 
+2. Before editing the resume, make a copy of the same with the Position name and then With each job description make sure to modify Skills and the project's work with respect to the specific job descriptions.
+3. Save the modified latex file and then use a latex engine to render the PDF for the resulting latex file; both the latex file and the resume are to be stored together in the directory structure mentioned above.
+
+
+When the portals are selected:
+1. Select upto 3 job protals
+2. Provide roles suggestion on the basis of the resume and also have the option to be able to add roles from the user as well. 
+3. Search for those specific roles on the selected job portals, gather the info about the job description and the role description and then modify the resume accordingly as per the flow given above. Then save those resume in the same directory location as mentioned above.
+
+Further info will be provided further as we plan

@@ -1,0 +1,90 @@
+=== DOCUMENT INFO ===
+File: My_resume.pdf
+Pages: 1
+creationDate: D:20260411174333Z
+creator: LaTeX with hyperref
+format: PDF 1.5
+modDate: D:20260411174333Z
+producer: pdfTeX-1.40.27
+
+=== PAGE 1 ===
+Rotation: 0
+Size: 612.00 x 792.00
+Links found: 5
+Link 1: mailto:aaryanbansal976@gmail.com
+Link 2: https://www.linkedin.com/in/aaryan-bansal/
+Link 3: https://github.com/netosis
+Link 4: https://github.com/netosis/Monitoring-System
+Link 5: https://github.com/netosis/Price-Comparison-System-using-Python
+Text:
+Aaryan Bansal
+ +91 8920567198
+# aaryanbansal976@gmail.com
+ï -aaryan-bansal
+§ Aaryan Bansal
+Objective
+A passionate Software Engineer with hands-on experience in the full application lifecycle, from development to deployment.
+Proficient in Python, Generative AI frameworks like LangChain, and MLOps tools such as Docker and Kubernetes. Eager to
+contribute to a collaborative team and solve challenging technical problems.
+Education
+Raj Kumar Goel Institute of Technology, Ghaziabad
+2024
+Bachelor of Technology Computer Science and Engineering (Data Science)
+SGPA: 7
+Delhi Public School Ghaziabad Vasundhara, Vasundhara
+2020
+CBSE, Class-XII
+Percentage: 81
+Delhi Public School Ghaziabad Vasundhara, Vasundhara
+2018
+CBSE, Class-X
+Percentage: 89
+Technical Skills
+Languages/Libraries: Python, Pandas, Numpy, Ollama, LangChain, Crew AI, Requests, OpenCV, Beautiful Soup,
+Selenium, MySQL, C, HTML
+Software & Tools: Git, VS Code, Docker, K8s, Influx DB, Graphana, VM Ware
+Experience
+Telaverge Communications Pvt. Ltd.
+Feb 2024 – Current
+Research and Development Engineer
+Hybrid
+• Designed and deployed a service using Generative AI that reduced the time for performance benchmark analysis by 40
+Percent, enabling faster data-driven decision-making.
+• Developed Benchmarking pipelines for models to analyze the performance and ensure quality of the Machine Learning
+Models.
+• Developed and maintained containerized applications using Kubernetes (K8s), Docker, and Jenkins, with experience in
+automating workflows using Ansible scripts.
+• Contributed to feature development, bug fixes, and performance improvements for an internal product using Python.
+• Implemented and optimized ML pipelines using OpenCV, Albumentations, and ADB, focusing on data cleaning,
+annotation, and preprocessing.
+• Streamlined CI/CD pipelines using Jenkins, ensuring efficient integration and deployment of new features.
+• Worked on automation and infrastructure maintenance using Shell scripting, enhancing system reliability and scalability.
+Eleve8 Solutions Pvt. Ltd.
+April 2023 – Aug 2023
+Project Trainee
+Hybrid
+• Worked on a Real-World Datasets for Model Training .
+• Used various Machine Learning libraries like ’scikit-learn’ to train the model. In it we used the Decision Tree and Forest
+Regressors to train the models and make predictions on new data.
+• Gained hands-on experience with IoT and AI technologies by applying them to real-world datasets.” (Or simply remove
+the line altogether).
+Projects
+Regal Automation | — Python, Flask, Ansible, Docker, Kubernetes, Helm Charts, MongoDB
+08/2023
+• Integrated customer products into Regal’s platform by analyzing and aligning with client requirements to ensure seamless
+functionality and compatibility.
+• Led Test planning, Test environment setup, and Test execution for Product end-to-end testing. Provided valuable QA
+perspective to assist developers in addressing ongoing challenges.
+• Analyzed code flow and feature scope to support ongoing code maintenance and bug fixes.
+• Designed algorithms for complex product features using class and sequence diagrams to guide implementation.
+CPU Monitoring System | Python, Scikit-Learn, Mongo DB, Pandas, Google Colab Git
+02/2024
+• Developed a CPU process monitoring system that uses Machine Learning to automatically find anomalies in running
+processes.
+• Used Scikit-Learn’s Random Forest Regressor to create the ML model.
+• Also used Mongo-DB to store the data about the various processes
+PRICE COMPARISON SYSTEM | Python, Requests, BeautifulSoup, HTML Git
+02/2022
+• Gives side-by-side price and specification comparison for a specific product from the E-Commerce Giants like Flipkart
+and Amazon.
+• Uses Beautiful-Soup(bs4) and Requests python libraries for the web scraping from Amazon and Flipkart.

@@ -1,0 +1,44 @@
+Campion Software
+
+Job Description:
+
+Job DescriptionWe are looking for an AI Engineer / LLM Engineer who can independently build AI-powered features for education, healthcare, SaaS, and knowledge-based products.
+
+The candidate should have strong hands-on experience in Python, Large Language Models, RAG, embeddings, vector databases, semantic search, and backend API development.
+
+The role requires someone who can understand requirements, design the AI workflow, implement the solution, and integrate it into production applications.
+
+Key Responsibilities
+
+    Build AI-powered applications using LLMs and Generative AI.
+    Develop RAG-based systems using internal content, documents, and knowledge bases.
+    Implement semantic search, intelligent Q&A, and content generation workflows.
+    Work with embeddings, vector databases, and document processing.
+    Develop backend APIs for AI features.
+    Improve AI response accuracy through prompt design, retrieval logic, and testing.
+    Reduce hallucination using source-based retrieval and validation methods.
+    Work independently from requirement understanding to development and deployment.
+
+Required Skills
+
+    Strong programming experience in Python
+    Experience with LLM APIs such as OpenAI, Claude, Gemini, or similar
+    Hands-on experience with RAG, embeddings, and vector databases
+    Experience with LangChain, LlamaIndex, or similar AI frameworks
+    Backend API development experience using FastAPI, Node.js, or NestJS
+    Good understanding of document processing, semantic search, and API integration
+    Basic knowledge of AWS, Docker, Git, and deployment
+
+Preferred Skills
+
+    Experience building production-ready AI applications
+    Experience in education, healthcare, SaaS, or knowledge-based platforms
+    Knowledge of prompt optimization, AI evaluation, and hallucination control
+
+Experience
+
+2–5 years of software development experience, with hands-on experience in AI / LLM-based application development.
+
+Ideal Candidate
+
+We are looking for someone who is strong in Python and practical AI development, not just theory. The candidate should be able to take a business requirement, design the AI approach, build the solution, and deliver a working product with minimal supervision
