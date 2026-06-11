@@ -1,3 +1,5 @@
 langchain-google-genai
 langchain-core
 PyMuPDF
+playwright
+python-dotenv
