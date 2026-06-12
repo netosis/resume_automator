@@ -1,3 +1,13 @@
 venv
 .env
 resume_txt
+generated_latex
+browser_snapshots
+logs
+resume_txt
+pdf_to_txt
+jd_to_latex/__pycache__
+browser_agent/__pycache__
+resume_to_latex/__pycache__
+__pycache__
+

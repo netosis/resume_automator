@@ -45,13 +45,31 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
+### LLM Provider Configuration
+
+The repository supports both Google Gemini and DeepSeek API. You can configure them using environment variables (e.g. in a `.env` file at the root of the project):
+
+- `LLM_PROVIDER`: Set to `deepseek` to use DeepSeek or `google` to use Gemini. If not specified, it will automatically default to `deepseek` if `DEEPSEEK_API_KEY` is present in the environment/`.env`, otherwise `google`.
+- **For DeepSeek:**
+  - `DEEPSEEK_API_KEY`: Your DeepSeek API key.
+  - `DEEPSEEK_API_BASE`: (Optional) Custom endpoint base URL (defaults to `https://api.deepseek.com/v1`).
+  - `DEEPSEEK_MODEL`: (Optional) Model name to use (defaults to `deepseek-chat`).
+- **For Google Gemini:**
+  - `GEMINI_API_KEY` or `GOOGLE_API_KEY`: Your Gemini API key.
+  - `GEMINI_MODEL`: (Optional) Model name to use (defaults to `gemini-2.5-flash` for browser agent or `gemini-2.0-flash` for tailoring workflow).
+
+To verify your DeepSeek connection, you can run the test script:
+```powershell
+python deepseek_test.py
+```
+
 ## Python dependencies
 
 Install the packages listed in `requirements.txt` before running the PDF conversion scripts.
 
 `resume_parser.py` uses `PyMuPDF` (`fitz`) for local data extraction.
 
-`resume_to_latex.py` requires a Google Gemini API key through `GOOGLE_API_KEY`, `GEMINI_API_KEY`, or the `--api-key` option.
+`resume_to_latex.py` requires a Google Gemini API key or a DeepSeek API key depending on the configured `LLM_PROVIDER`.
 
 ## Usage
 

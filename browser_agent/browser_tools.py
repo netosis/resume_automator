@@ -318,6 +318,102 @@ def scroll_page(direction: str) -> str:
         return f"Failed to scroll page. Error: {str(e)}"
 
 
+def get_interactable_buttons_raw(page: Page) -> list:
+    """
+    Evaluates JavaScript on the page to retrieve the raw list of interactable buttons.
+    """
+    js_code = """
+    () => {
+        const oldElements = document.querySelectorAll('[data-interactable-id]');
+        oldElements.forEach(el => el.removeAttribute('data-interactable-id'));
+
+        const candidates = Array.from(document.querySelectorAll(
+            'button, input[type="button"], input[type="submit"], input[type="reset"], [role="button"], a, .btn, .button'
+        ));
+        
+        const interactableButtons = [];
+        let index = 0;
+        
+        for (const el of candidates) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+            
+            const id = `button-${index++}`;
+            el.setAttribute('data-interactable-id', id);
+            
+            let text = el.innerText ? el.innerText.trim() : "";
+            if (!text) {
+                text = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || "";
+                text = text.trim();
+            }
+            
+            if (text.length > 100) {
+                text = text.substring(0, 100) + "...";
+            }
+            
+            let standardSelector = "";
+            if (el.id) {
+                standardSelector = `#${el.id}`;
+            } else {
+                const tagName = el.tagName.toLowerCase();
+                const classes = Array.from(el.classList)
+                    .filter(c => typeof c === 'string' && !c.startsWith('data-') && !c.includes('hover') && !c.includes('active'))
+                    .join('.');
+                if (classes) {
+                    standardSelector = `${tagName}.${classes.substring(0, 50)}`;
+                } else {
+                    standardSelector = tagName;
+                }
+            }
+            
+            interactableButtons.push({
+                "id": id,
+                "tag": el.tagName.toLowerCase(),
+                "text": text || "[No text/label]",
+                "temp_selector": `[data-interactable-id="${id}"]`,
+                "standard_selector": standardSelector
+            });
+        }
+        return interactableButtons;
+    }
+    """
+    return page.evaluate(js_code)
+
+
+@tool
+def get_interactable_buttons() -> str:
+    """
+    Scans the current page for visible, interactable buttons and clickable elements.
+    Assigns temporary `data-interactable-id` selectors to these elements and returns
+    a formatted text list of the buttons.
+    Use this list to decide which button to click. You can click any element in the list
+    by passing its 'temp_selector' (e.g., '[data-interactable-id="button-0"]') to the `click_on_element` tool.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        buttons = get_interactable_buttons_raw(page)
+        
+        if not buttons:
+            return "No interactable buttons or clickable elements were found on the current page."
+            
+        result_lines = []
+        result_lines.append(f"Found {len(buttons)} interactable elements:")
+        for idx, btn in enumerate(buttons):
+            result_lines.append(
+                f"{idx + 1}. [{btn['tag']}] \"{btn['text']}\" -> Selector: {btn['temp_selector']} (Approx: {btn['standard_selector']})"
+            )
+            
+        return "\n".join(result_lines)
+    except Exception as e:
+        return f"Failed to retrieve interactable buttons. Error: {str(e)}"
+
+
 @tool
 def close_browser_session() -> str:
     """

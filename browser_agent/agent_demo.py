@@ -3,7 +3,6 @@ import sys
 import time
 import random
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
 
 def invoke_model_with_retry(model, messages, max_retries=5, initial_delay=2.0):
@@ -35,6 +34,7 @@ from browser_tools import (
     click_on_element,
     input_text_into_element,
     scroll_page,
+    get_interactable_buttons,
     close_browser_session
 )
 
@@ -45,18 +45,46 @@ def run_browser_agent(prompt: str):
     """
     Runs a simple agent loop using the Gemini model and the browser tools.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("Error: GEMINI_API_KEY is not set in your environment variables.")
-        print("Please create a .env file or export the key, then try again.")
-        return
+    # Determine which LLM provider to use (default to deepseek if DEEPSEEK_API_KEY is present)
+    provider = os.getenv("LLM_PROVIDER")
+    if not provider:
+        provider = "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "google"
+    provider = provider.lower()
 
-    # Initialize Gemini model via LangChain
-    model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        api_key=api_key,
-        temperature=0.0
-    )
+    if provider == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            print("Error: DEEPSEEK_API_KEY is not set in your environment variables.")
+            print("Please create a .env file or export the key, then try again.")
+            return
+        
+        api_base = os.getenv("DEEPSEEK_API_BASE") or "https://api.deepseek.com/v1"
+        model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        
+        print(f"Initializing ChatDeepSeek model='{model_name}' at base='{api_base}'...")
+        from langchain_deepseek import ChatDeepSeek
+        model = ChatDeepSeek(
+            model=model_name,
+            api_key=api_key,
+            api_base=api_base,
+            temperature=0.0
+        )
+    else:
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            print("Error: GEMINI_API_KEY / GOOGLE_API_KEY is not set in your environment variables.")
+            print("Please create a .env file or export the key, then try again.")
+            return
+        
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        
+        print(f"Initializing ChatGoogleGenerativeAI model='{model_name}'...")
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        model = ChatGoogleGenerativeAI(
+            model=model_name,
+            api_key=api_key,
+            temperature=0.0
+        )
 
     # Define tool library
     tools = [
@@ -65,6 +93,7 @@ def run_browser_agent(prompt: str):
         click_on_element,
         input_text_into_element,
         scroll_page,
+        get_interactable_buttons,
         close_browser_session
     ]
 
@@ -85,9 +114,9 @@ def run_browser_agent(prompt: str):
         ))
     ]
 
-    max_steps = 15
+    max_steps = 10
     for step in range(max_steps):
-        print(f"[Agent Step {step + 1}] Invoking Gemini...")
+        print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
         try:
             response = invoke_model_with_retry(model_with_tools, messages)
         except Exception as e:

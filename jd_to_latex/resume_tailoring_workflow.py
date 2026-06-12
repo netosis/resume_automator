@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from jd_latex_modifier_system_prompt import (
     SECTION_PLANNING_SYSTEM_PROMPT,
@@ -187,8 +186,30 @@ class ResumeSections:
 
 class ResumeTailoringAgent:
 	def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
-		resolved_api_key = resolve_api_key(api_key)
-		self.llm = ChatGoogleGenerativeAI(model=model, google_api_key=resolved_api_key)
+		load_env_file()
+		provider = os.getenv("LLM_PROVIDER")
+		if not provider:
+			provider = "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "google"
+		provider = provider.lower()
+
+		if provider == "deepseek":
+			model_name = model if "gemini" not in model.lower() else "deepseek-chat"
+			resolved_api_key = resolve_api_key(api_key, provider="deepseek")
+			api_base = os.getenv("DEEPSEEK_API_BASE") or "https://api.deepseek.com/v1"
+			
+			from langchain_deepseek import ChatDeepSeek
+			self.llm = ChatDeepSeek(
+				model=model_name,
+				api_key=resolved_api_key,
+				api_base=api_base,
+				temperature=0.0
+			)
+		else:
+			model_name = model
+			resolved_api_key = resolve_api_key(api_key, provider="google")
+			
+			from langchain_google_genai import ChatGoogleGenerativeAI
+			self.llm = ChatGoogleGenerativeAI(model=model_name, google_api_key=resolved_api_key)
 		self.iteration_counter = 0
 		self.iteration_records: list[IterationRecord] = []
 
@@ -210,7 +231,8 @@ class ResumeTailoringAgent:
 				phase, estimated_tokens,
 			)
 
-		LOGGER.info(f"Invoking {self.llm.model} for phase '{phase}' (Iteration {self.iteration_counter})...")
+		model_display_name = getattr(self.llm, "model", getattr(self.llm, "model_name", "unknown"))
+		LOGGER.info(f"Invoking {model_display_name} for phase '{phase}' (Iteration {self.iteration_counter})...")
 		try:
 			response = self.llm.invoke([
 				SystemMessage(content=system_prompt),
@@ -313,19 +335,26 @@ def load_env_file(env_path: str = ".env") -> None:
 			os.environ[key] = value
 
 
-def resolve_api_key(api_key: str | None = None) -> str:
+def resolve_api_key(api_key: str | None = None, provider: str = "google") -> str:
 	if api_key:
 		return api_key
 
 	load_env_file()
 
-	env_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-	if env_api_key:
-		return env_api_key
-
-	raise ValueError(
-		"Missing API key. Pass --api-key or set GOOGLE_API_KEY (or GEMINI_API_KEY)."
-	)
+	if provider == "deepseek":
+		env_api_key = os.getenv("DEEPSEEK_API_KEY")
+		if env_api_key:
+			return env_api_key
+		raise ValueError(
+			"Missing API key. Pass --api-key or set DEEPSEEK_API_KEY."
+		)
+	else:
+		env_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+		if env_api_key:
+			return env_api_key
+		raise ValueError(
+			"Missing API key. Pass --api-key or set GOOGLE_API_KEY (or GEMINI_API_KEY)."
+		)
 
 
 def resolve_tex_path(tex_path: str) -> Path:
@@ -373,8 +402,8 @@ def get_token_usage(response: object) -> tuple[int | None, int | None]:
 	if isinstance(response_metadata, dict):
 		token_usage = response_metadata.get("token_usage") or {}
 		if isinstance(token_usage, dict):
-			input_tokens = token_usage.get("prompt_token_count")
-			output_tokens = token_usage.get("candidates_token_count")
+			input_tokens = token_usage.get("prompt_token_count") or token_usage.get("prompt_tokens")
+			output_tokens = token_usage.get("candidates_token_count") or token_usage.get("completion_tokens")
 			if input_tokens is not None or output_tokens is not None:
 				return input_tokens, output_tokens
 
