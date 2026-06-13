@@ -1,6 +1,7 @@
 import os
 import re
-from typing import Optional
+import json
+from typing import Optional, Dict, List, Any, Type
 from playwright.sync_api import sync_playwright, Playwright, BrowserContext, Page
 from langchain_core.tools import tool
 
@@ -192,13 +193,193 @@ def clean_page_text(text: str) -> str:
     return text.strip()
 
 
+def get_accessibility_snapshot_sync(page: Page) -> Optional[dict]:
+    """
+    CDP helper to retrieve the accessibility tree as a hierarchical dict synchronously.
+    """
+    try:
+        client = page.context.new_cdp_session(page)
+        ax_tree = client.send("Accessibility.getFullAXTree")
+        
+        nodes = ax_tree.get("nodes", [])
+        if not nodes:
+            return None
+        
+        node_map = {}
+        for node in nodes:
+            node_id = node.get("nodeId")
+            if node_id:
+                node_map[node_id] = node
+                
+        root_node = nodes[0]
+        for node in nodes:
+            role = node.get("role", {}).get("value", "")
+            if role == "RootWebArea":
+                root_node = node
+                break
+                
+        def build_node(node_id: str, depth: int = 0) -> Any:
+            if depth > 25:
+                return None
+            node = node_map.get(node_id)
+            if not node:
+                return None
+                
+            if node.get("ignored", False):
+                children_nodes = []
+                for child_id in node.get("childIds", []):
+                    child_res = build_node(child_id, depth)
+                    if child_res:
+                        if isinstance(child_res, list):
+                            children_nodes.extend(child_res)
+                        else:
+                            children_nodes.append(child_res)
+                return children_nodes
+                
+            role = node.get("role", {}).get("value", "")
+            name = node.get("name", {}).get("value", "")
+            
+            children_nodes = []
+            for child_id in node.get("childIds", []):
+                child_res = build_node(child_id, depth + 1)
+                if child_res:
+                    if isinstance(child_res, list):
+                        children_nodes.extend(child_res)
+                    else:
+                        children_nodes.append(child_res)
+                        
+            res = {
+                "role": role,
+                "name": name,
+            }
+            if children_nodes:
+                res["children"] = children_nodes
+                
+            # Copy relevant properties
+            for prop in node.get("properties", []):
+                prop_name = prop.get("name")
+                prop_val = prop.get("value", {}).get("value")
+                if prop_name in ["focused", "focusable", "pressed", "disabled", "checked", "expanded"]:
+                    res[prop_name] = prop_val
+                elif prop_name == "url":
+                    res["value"] = prop_val
+                    
+            return res
+
+        result = build_node(root_node.get("nodeId", ""))
+        if isinstance(result, list):
+            return result[0] if result else None
+        return result
+    except Exception as e:
+        print(f"[PersistentBrowserManager] Error building accessibility snapshot via CDP: {e}")
+        return None
+
+
+def prune_accessibility_tree(node: dict, mode: str = "interactive", depth: int = 0) -> list:
+    """
+    Recursively prune the accessibility tree based on mode (synchronous).
+    """
+    if not node or depth > 25:
+        return []
+    
+    results = []
+    role = node.get('role', '').lower()
+    name = node.get('name', '')
+    
+    is_relevant = False
+    
+    if mode == "interactive":
+        interactive_roles = {
+            'button', 'link', 'textbox', 'checkbox', 'radio', 
+            'combobox', 'listbox', 'menuitem', 'tab', 'slider',
+            'searchbox', 'spinbutton', 'switch'
+        }
+        is_relevant = role in interactive_roles
+        
+    elif mode == "reading":
+        content_roles = {
+            'heading', 'paragraph', 'article', 'main', 'navigation',
+            'button', 'link', 'list', 'listitem', 'section', 'region',
+            'document', 'banner', 'complementary', 'contentinfo'
+        }
+        is_relevant = role in content_roles
+        
+    else:  # full mode
+        is_relevant = True
+    
+    if is_relevant and (name or role):
+        compact_node = {
+            'role': role,
+            'name': name[:80] if name else '',
+        }
+        
+        if role in ['textbox', 'searchbox']:
+            if 'value' in node:
+                compact_node['value'] = str(node['value'])[:50]
+                
+        elif role == 'link':
+            if 'value' in node:
+                compact_node['url'] = str(node['value'])[:100]
+                
+        elif role == 'button':
+            if 'pressed' in node:
+                compact_node['pressed'] = node['pressed']
+        
+        # Add basic boolean states if present
+        for prop in ["focused", "focusable", "pressed", "disabled", "checked", "expanded"]:
+            if prop in node and prop not in compact_node:
+                compact_node[prop] = node[prop]
+                
+        results.append(compact_node)
+    
+    for child in node.get('children', []):
+        results.extend(prune_accessibility_tree(child, mode, depth + 1))
+    
+    return results
+
+
+ACCESSIBILITY_TREE_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accessibility_tree.json")
+
+
+def get_accessibility_info(page: Page, mode: str = "interactive") -> str:
+    """
+    Retrieves the accessibility snapshot of the page, saves it to a json file, and returns a pruned/formatted version.
+    """
+    snapshot = get_accessibility_snapshot_sync(page)
+    if not snapshot:
+        return "No accessibility tree available."
+    
+    pruned = prune_accessibility_tree(snapshot, mode)
+    
+    # Save the pruned tree to accessibility_tree.json for other functions to access
+    try:
+        with open(ACCESSIBILITY_TREE_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(pruned, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[get_accessibility_info] Warning: failed to save accessibility tree JSON: {e}")
+        
+    total_elements = len(pruned)
+    limited_pruned = pruned[:100]
+    
+    result = {
+        "mode": mode,
+        "total_elements": total_elements,
+        "elements": limited_pruned
+    }
+    if total_elements > 100:
+        result["message"] = f"Showing first 100 of {total_elements} elements."
+        
+    return json.dumps(result, indent=2)
+
+
 # LangChain Tools definitions
 
 @tool
-def open_website(url: str) -> str:
+def open_website(url: str, mode: str = "interactive") -> str:
     """
     Launches the configured browser (if not already open) and navigates to the specified URL.
     Use this to open job boards like naukri.com, glassdoor.com, linkedin.com, or general links.
+    Returns page title, current URL, and the pruned accessibility tree of the page.
     """
     try:
         # Standardize URL
@@ -216,7 +397,12 @@ def open_website(url: str) -> str:
         
         title = page.title()
         current_url = page.url
-        return f"Successfully opened {current_url}. Page Title: '{title}'."
+        
+        a11y_info = get_accessibility_info(page, mode)
+        return (
+            f"Successfully opened {current_url}. Page Title: '{title}'.\n\n"
+            f"Accessibility Tree ({mode} mode):\n{a11y_info}"
+        )
     except Exception as e:
         return f"Failed to navigate to {url}. Error: {str(e)}"
 
@@ -246,10 +432,11 @@ def get_page_text() -> str:
 
 
 @tool
-def click_on_element(selector: str) -> str:
+def click_on_element(selector: str, mode: str = "interactive") -> str:
     """
     Clicks on a web element using a CSS selector or text pattern (e.g., 'button.search', 'text=Apply Now').
     Use this to interact with buttons, search buttons, links, or checkmarks.
+    Returns confirmation and the updated pruned accessibility tree.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -264,17 +451,23 @@ def click_on_element(selector: str) -> str:
         locator.click()
         
         # Wait for potential navigation or state change
-        page.wait_for_timeout(1000)
-        return f"Successfully clicked the element: '{selector}'."
+        page.wait_for_timeout(1500)
+        
+        a11y_info = get_accessibility_info(page, mode)
+        return (
+            f"Successfully clicked the element: '{selector}'.\n\n"
+            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+        )
     except Exception as e:
         return f"Failed to click element '{selector}'. Error: {str(e)}"
 
 
 @tool
-def input_text_into_element(selector: str, text: str) -> str:
+def input_text_into_element(selector: str, text: str, mode: str = "interactive") -> str:
     """
     Inputs/types text into a web input field matching the CSS selector (e.g., 'input[name="q"]', 'input#search-box').
     Use this to fill in search terms, search boxes, usernames, or application details.
+    Returns confirmation and the updated pruned accessibility tree.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -289,16 +482,24 @@ def input_text_into_element(selector: str, text: str) -> str:
         print(f"[Tool: input_text_into_element] Entering text into: {selector}")
         locator.type(text, delay=50) # Type with a small realistic delay
         
-        return f"Successfully typed '{text}' into element: '{selector}'."
+        # Wait a moment for dynamic page updates after typing
+        page.wait_for_timeout(1000)
+        
+        a11y_info = get_accessibility_info(page, mode)
+        return (
+            f"Successfully typed '{text}' into element: '{selector}'.\n\n"
+            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+        )
     except Exception as e:
         return f"Failed to type into element '{selector}'. Error: {str(e)}"
 
 
 @tool
-def scroll_page(direction: str) -> str:
+def scroll_page(direction: str, mode: str = "interactive") -> str:
     """
     Scrolls the page 'down' or 'up' to trigger loading of dynamic content (like continuous scrolling on LinkedIn or Naukri).
     direction: Must be either 'down' or 'up'.
+    Returns confirmation and the updated pruned accessibility tree.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -306,99 +507,69 @@ def scroll_page(direction: str) -> str:
         
         if direction.lower() == "down":
             page.evaluate("window.scrollBy(0, window.innerHeight);")
-            page.wait_for_timeout(1000)
-            return "Successfully scrolled down the page."
+            page.wait_for_timeout(1500)
+            status = "Successfully scrolled down the page."
         elif direction.lower() == "up":
             page.evaluate("window.scrollBy(0, -window.innerHeight);")
-            page.wait_for_timeout(1000)
-            return "Successfully scrolled up the page."
+            page.wait_for_timeout(1500)
+            status = "Successfully scrolled up the page."
         else:
             return "Invalid direction. Please specify 'down' or 'up'."
+            
+        a11y_info = get_accessibility_info(page, mode)
+        return (
+            f"{status}\n\n"
+            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+        )
     except Exception as e:
         return f"Failed to scroll page. Error: {str(e)}"
 
 
-def get_interactable_buttons_raw(page: Page) -> list:
-    """
-    Evaluates JavaScript on the page to retrieve the raw list of interactable buttons.
-    """
-    js_code = """
-    () => {
-        const oldElements = document.querySelectorAll('[data-interactable-id]');
-        oldElements.forEach(el => el.removeAttribute('data-interactable-id'));
-
-        const candidates = Array.from(document.querySelectorAll(
-            'button, input[type="button"], input[type="submit"], input[type="reset"], [role="button"], a, .btn, .button'
-        ));
-        
-        const interactableButtons = [];
-        let index = 0;
-        
-        for (const el of candidates) {
-            const rect = el.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) continue;
-            
-            const style = window.getComputedStyle(el);
-            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
-            if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
-            
-            const id = `button-${index++}`;
-            el.setAttribute('data-interactable-id', id);
-            
-            let text = el.innerText ? el.innerText.trim() : "";
-            if (!text) {
-                text = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || "";
-                text = text.trim();
-            }
-            
-            if (text.length > 100) {
-                text = text.substring(0, 100) + "...";
-            }
-            
-            let standardSelector = "";
-            if (el.id) {
-                standardSelector = `#${el.id}`;
-            } else {
-                const tagName = el.tagName.toLowerCase();
-                const classes = Array.from(el.classList)
-                    .filter(c => typeof c === 'string' && !c.startsWith('data-') && !c.includes('hover') && !c.includes('active'))
-                    .join('.');
-                if (classes) {
-                    standardSelector = `${tagName}.${classes.substring(0, 50)}`;
-                } else {
-                    standardSelector = tagName;
-                }
-            }
-            
-            interactableButtons.push({
-                "id": id,
-                "tag": el.tagName.toLowerCase(),
-                "text": text || "[No text/label]",
-                "temp_selector": `[data-interactable-id="${id}"]`,
-                "standard_selector": standardSelector
-            });
-        }
-        return interactableButtons;
-    }
-    """
-    return page.evaluate(js_code)
 
 
 @tool
 def get_interactable_buttons() -> str:
     """
     Scans the current page for visible, interactable buttons and clickable elements.
-    Assigns temporary `data-interactable-id` selectors to these elements and returns
-    a formatted text list of the buttons.
-    Use this list to decide which button to click. You can click any element in the list
-    by passing its 'temp_selector' (e.g., '[data-interactable-id="button-0"]') to the `click_on_element` tool.
+    Uses the already created accessibility_tree.json. If the file is not present,
+    it calls get_accessibility_info to generate it and then gathers interactive elements from there.
+    Returns a formatted text list of the buttons.
     """
     try:
-        manager = PersistentBrowserManager.get_instance()
-        page = manager.get_page()
+        if not os.path.exists(ACCESSIBILITY_TREE_JSON_PATH):
+            print("[get_interactable_buttons] accessibility_tree.json not found. Generating it now...")
+            manager = PersistentBrowserManager.get_instance()
+            page = manager.get_page()
+            # Generate the json in interactive mode
+            get_accessibility_info(page, "interactive")
+            
+        if not os.path.exists(ACCESSIBILITY_TREE_JSON_PATH):
+            return "No accessibility tree or interactable buttons available."
+            
+        with open(ACCESSIBILITY_TREE_JSON_PATH, "r", encoding="utf-8") as f:
+            elements = json.load(f)
+            
+        # Filter buttons, links and other clickable roles
+        clickable_roles = {
+            'button', 'link', 'checkbox', 'radio', 'combobox', 
+            'listbox', 'menuitem', 'tab', 'slider', 'switch'
+        }
         
-        buttons = get_interactable_buttons_raw(page)
-        
+        buttons = []
+        for elem in elements:
+            role = elem.get("role", "").lower()
+            if role in clickable_roles:
+                name = elem.get("name", "")
+                if not name:
+                    continue
+                name_escaped = name.replace('"', '\\"')
+                selector = f'role={role}[name="{name_escaped}"]'
+                buttons.append({
+                    "role": role,
+                    "name": name,
+                    "selector": selector
+                })
+                
         if not buttons:
             return "No interactable buttons or clickable elements were found on the current page."
             
@@ -406,12 +577,28 @@ def get_interactable_buttons() -> str:
         result_lines.append(f"Found {len(buttons)} interactable elements:")
         for idx, btn in enumerate(buttons):
             result_lines.append(
-                f"{idx + 1}. [{btn['tag']}] \"{btn['text']}\" -> Selector: {btn['temp_selector']} (Approx: {btn['standard_selector']})"
+                f"{idx + 1}. [{btn['role']}] \"{btn['name']}\" -> Selector: {btn['selector']}"
             )
             
         return "\n".join(result_lines)
     except Exception as e:
         return f"Failed to retrieve interactable buttons. Error: {str(e)}"
+
+
+@tool
+def get_accessibility_tree(mode: str = "interactive") -> str:
+    """
+    Retrieves the accessibility tree of the currently active page.
+    mode: Can be 'interactive' (buttons, links, textboxes), 'reading' (headings, text), or 'full'.
+    Returns the pruned accessibility tree of the current page.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        a11y_info = get_accessibility_info(page, mode)
+        return a11y_info
+    except Exception as e:
+        return f"Failed to retrieve accessibility tree. Error: {str(e)}"
 
 
 @tool
