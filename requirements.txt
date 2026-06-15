@@ -1,3 +1,7 @@
 langchain-google-genai
 langchain-core
+langchain-deepseek
 PyMuPDF
+playwright
+python-dotenv
+browser-use

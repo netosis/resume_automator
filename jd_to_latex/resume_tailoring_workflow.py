@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from jd_latex_modifier_system_prompt import (
     SECTION_PLANNING_SYSTEM_PROMPT,
@@ -64,21 +63,65 @@ class ResumeSections:
 		if not original_latex.strip():
 			raise ValueError(f"Input LaTeX resume is empty: {path}")
 
-		summary_original = extract_between_markers(
-			original_latex,
-			r"\begin{center}",
-			r"\end{center}",
+		summary_original = ""
+		try:
+			summary_original = extract_between_markers(
+				original_latex,
+				r"\begin{center}",
+				r"\end{center}",
+			)
+		except Exception:
+			pass
+
+		# Find all section headers: \section{...} or \section*{...}
+		section_matches = list(re.finditer(r"\\section\*?\{([^}]+)\}", original_latex))
+		
+		sections_content = {}
+		for i, match in enumerate(section_matches):
+			name = match.group(1).strip().upper()
+			start_idx = match.end()
+			end_idx = section_matches[i+1].start() if i + 1 < len(section_matches) else original_latex.find(r"\end{document}")
+			if end_idx == -1:
+				end_idx = len(original_latex)
+			
+			content = original_latex[start_idx:end_idx].strip()
+			sections_content[name] = content
+
+		# Map found sections to standard categories
+		education_original = next((sections_content[k] for k in sections_content if "EDUCATION" in k), "")
+		experience_original = next((sections_content[k] for k in sections_content if "EXPERIENCE" in k or "WORK" in k or "EMPLOYMENT" in k), "")
+		
+		other_parameters_original = ""
+		projects_name = next((k for k in sections_content if "PROJECT" in k), None)
+		if projects_name:
+			proj_match = next(m for m in section_matches if m.group(1).strip().upper() == projects_name)
+			start_idx = proj_match.end()
+			end_idx = original_latex.find(r"\end{document}")
+			if end_idx == -1:
+				end_idx = len(original_latex)
+			other_parameters_original = original_latex[start_idx:end_idx].strip()
+
+		# Parse blocks
+		block_pattern = re.compile(
+			r"(\\noindent\s*.*?|\\resumeSubheading\s*.*?)(?=\n\s*\\noindent|\n\s*\\resumeSubheading|\n\s*%------------------------|\n\s*\\section|\Z)",
+			re.DOTALL,
 		)
-		education_original, experience_original, education_blocks, experience_blocks = cls._extract_employment_sections(original_latex)
-		other_parameters_original = extract_between_markers(
-			original_latex,
-			r"\section{PROJECTS}",
-			r"\end{document}",
-		)
+		
+		experience_blocks = []
+		if experience_original:
+			experience_blocks = [match.group(1).rstrip() for match in block_pattern.finditer(experience_original)]
+			experience_blocks = [b.strip() for b in experience_blocks if b.strip()]
+			
+		education_blocks = []
+		if education_original:
+			education_blocks = [match.group(1).rstrip() for match in block_pattern.finditer(education_original)]
+			education_blocks = [b.strip() for b in education_blocks if b.strip()]
 
 		extracted_skills: list[str] = []
-		if agent:
+		if agent and experience_original:
 			extracted_skills = agent.extract_skills(experience_original)
+
+		has_explicit_skills = any("SKILL" in k for k in sections_content)
 
 		return cls(
 			latex_path=path,
@@ -93,39 +136,15 @@ class ResumeSections:
 			skills=format_skill_list(extracted_skills),
 			other_parameters=other_parameters_original.strip(),
 			skill_keywords=extracted_skills,
-			has_explicit_skills_section=bool(re.search(r"\\section\*?\{SKILLS\}", original_latex, flags=re.IGNORECASE)),
+			has_explicit_skills_section=has_explicit_skills,
 			education_blocks=education_blocks,
 			experience_blocks=experience_blocks,
 		)
 
 	@staticmethod
 	def _extract_employment_sections(original_latex: str) -> tuple[str, str, list[str], list[str]]:
-		employment_body = extract_between_markers(
-			original_latex,
-			r"\section{EXPERIENCE}",
-			r"\section{PROJECTS}",
-		)
-		education_body = extract_between_markers(
-			original_latex,
-			r"\section{EDUCATION}",
-			r"\section{SKILLS}",
-		)
-		
-		# Merge if needed, but since it returns blocks, we can just process both
-		block_pattern = re.compile(
-			r"(\\noindent\s*.*?|\\resumeSubheading\s*.*?)(?=\n\s*\\noindent|\n\s*\\resumeSubheading|\n\s*%------------------------|\n\s*\\section|\Z)",
-			re.DOTALL,
-		)
-		
-		exp_blocks = [match.group(1).rstrip() for match in block_pattern.finditer(employment_body)]
-		ed_blocks = [match.group(1).rstrip() for match in block_pattern.finditer(education_body)]
-		
-		experience_blocks: list[str] = [b.strip() for b in exp_blocks if b.strip()]
-		education_blocks: list[str] = [b.strip() for b in ed_blocks if b.strip()]
-
-		education_text = education_body.strip()
-		experience_text = employment_body.strip()
-		return education_text, experience_text, education_blocks, experience_blocks
+		# Deprecated: Kept for backwards compatibility but not used in dynamic loading
+		return "", "", [], []
 
 	def preview_map(self) -> dict[str, str]:
 		return {
@@ -187,8 +206,30 @@ class ResumeSections:
 
 class ResumeTailoringAgent:
 	def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
-		resolved_api_key = resolve_api_key(api_key)
-		self.llm = ChatGoogleGenerativeAI(model=model, google_api_key=resolved_api_key)
+		load_env_file()
+		provider = os.getenv("LLM_PROVIDER")
+		if not provider:
+			provider = "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "google"
+		provider = provider.lower()
+
+		if provider == "deepseek":
+			model_name = model if "gemini" not in model.lower() else (os.getenv("DEEPSEEK_MODEL") or "deepseek-chat")
+			resolved_api_key = resolve_api_key(api_key, provider="deepseek")
+			api_base = os.getenv("DEEPSEEK_API_BASE") or "https://api.deepseek.com/v1"
+			
+			from langchain_deepseek import ChatDeepSeek
+			self.llm = ChatDeepSeek(
+				model=model_name,
+				api_key=resolved_api_key,
+				api_base=api_base,
+				temperature=0.0
+			)
+		else:
+			model_name = model
+			resolved_api_key = resolve_api_key(api_key, provider="google")
+			
+			from langchain_google_genai import ChatGoogleGenerativeAI
+			self.llm = ChatGoogleGenerativeAI(model=model_name, google_api_key=resolved_api_key)
 		self.iteration_counter = 0
 		self.iteration_records: list[IterationRecord] = []
 
@@ -210,7 +251,8 @@ class ResumeTailoringAgent:
 				phase, estimated_tokens,
 			)
 
-		LOGGER.info(f"Invoking {self.llm.model} for phase '{phase}' (Iteration {self.iteration_counter})...")
+		model_display_name = getattr(self.llm, "model", getattr(self.llm, "model_name", "unknown"))
+		LOGGER.info(f"Invoking {model_display_name} for phase '{phase}' (Iteration {self.iteration_counter})...")
 		try:
 			response = self.llm.invoke([
 				SystemMessage(content=system_prompt),
@@ -313,19 +355,26 @@ def load_env_file(env_path: str = ".env") -> None:
 			os.environ[key] = value
 
 
-def resolve_api_key(api_key: str | None = None) -> str:
+def resolve_api_key(api_key: str | None = None, provider: str = "google") -> str:
 	if api_key:
 		return api_key
 
 	load_env_file()
 
-	env_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-	if env_api_key:
-		return env_api_key
-
-	raise ValueError(
-		"Missing API key. Pass --api-key or set GOOGLE_API_KEY (or GEMINI_API_KEY)."
-	)
+	if provider == "deepseek":
+		env_api_key = os.getenv("DEEPSEEK_API_KEY")
+		if env_api_key:
+			return env_api_key
+		raise ValueError(
+			"Missing API key. Pass --api-key or set DEEPSEEK_API_KEY."
+		)
+	else:
+		env_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+		if env_api_key:
+			return env_api_key
+		raise ValueError(
+			"Missing API key. Pass --api-key or set GOOGLE_API_KEY (or GEMINI_API_KEY)."
+		)
 
 
 def resolve_tex_path(tex_path: str) -> Path:
@@ -373,8 +422,8 @@ def get_token_usage(response: object) -> tuple[int | None, int | None]:
 	if isinstance(response_metadata, dict):
 		token_usage = response_metadata.get("token_usage") or {}
 		if isinstance(token_usage, dict):
-			input_tokens = token_usage.get("prompt_token_count")
-			output_tokens = token_usage.get("candidates_token_count")
+			input_tokens = token_usage.get("prompt_token_count") or token_usage.get("prompt_tokens")
+			output_tokens = token_usage.get("candidates_token_count") or token_usage.get("completion_tokens")
 			if input_tokens is not None or output_tokens is not None:
 				return input_tokens, output_tokens
 
@@ -788,10 +837,17 @@ def main() -> None:
 		help=f"Directory for modified .tex output (default: {DEFAULT_OUTPUT_DIR})",
 	)
 	parser.add_argument("--output-name", default=None, help="Output file name without extension")
-	parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Gemini model name (default: {DEFAULT_MODEL})")
-	parser.add_argument("--api-key", dest="api_key", default=None, help="Google/Gemini API key")
+	parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model name (default: {DEFAULT_MODEL})")
+	parser.add_argument("--api-key", dest="api_key", default=None, help="Model API key")
+	parser.add_argument("--provider", default=None, help="LLM provider: 'google' or 'deepseek'")
+	parser.add_argument("--api-base", default=None, help="Custom API base URL")
 	parser.add_argument("--log-level", default=DEFAULT_LOG_LEVEL, help=f"Logging level (default: {DEFAULT_LOG_LEVEL})")
 	args = parser.parse_args()
+
+	if args.provider:
+		os.environ["LLM_PROVIDER"] = args.provider
+	if args.api_base:
+		os.environ["DEEPSEEK_API_BASE"] = args.api_base
 
 	logging.basicConfig(
 		level=getattr(logging, args.log_level.upper(), logging.INFO),
