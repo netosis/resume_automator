@@ -154,8 +154,27 @@ Optional arguments:
 
 - `--output-dir` directory to save modified `.tex` file (default: `generated_latex`)
 - `--output-name` custom output file name without extension
-- `--model` Gemini model name (default: `gemini-2.0-flash`)
-- `--api-key` Gemini API key (or set `GOOGLE_API_KEY`/`GEMINI_API_KEY`)
+- `--model` Model name (default: `gemini-2.0-flash`)
+- `--api-key` API key for the model provider
+- `--provider` LLM provider: 'google' or 'deepseek'
+- `--api-base` Custom API base URL (mostly for DeepSeek)
+
+## Visualizing Code Explanations
+
+The `resume_to_latex/code_explaination` directory contains technical code explanations and architecture flowcharts (such as [latex_engine.md](file:///d:/LLM%20Projects/resume_automator/resume_to_latex/code_explaination/latex_engine.md)) written in Markdown using **Mermaid** syntax.
+
+To render and visualize these flowcharts, you can use:
+
+### VS Code Extensions
+- **Markdown Preview Mermaid Support** (by Matt Bierner) - Automatically renders Mermaid diagrams inside VS Code's built-in Markdown Preview.
+- **Mermaid Previewer** - Allows side-by-side previewing of Mermaid code.
+- **Mermaid Chart** - Provides rich support for creating and editing diagrams in VS Code.
+
+### Web & Git Platforms
+- **GitHub / GitLab**: If you view these files on GitHub or GitLab, Mermaid blocks are rendered natively in the browser.
+- **Mermaid Live Editor**: You can copy and paste the Mermaid code block into the [Mermaid Live Editor](https://mermaid.live) to view, edit, or export the flowchart.
+
+---
 
 ## Behavior
 

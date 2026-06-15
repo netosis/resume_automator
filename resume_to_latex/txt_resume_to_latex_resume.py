@@ -125,7 +125,7 @@ def txt_to_resume_latex(
     provider = provider.lower()
 
     if provider == "deepseek":
-        model_name = model if "gemini" not in model.lower() else "deepseek-chat"
+        model_name = model if "gemini" not in model.lower() else (os.getenv("DEEPSEEK_MODEL") or "deepseek-chat")
         resolved_api_key = resolve_api_key(api_key, provider="deepseek")
         api_base = os.getenv("DEEPSEEK_API_BASE") or "https://api.deepseek.com/v1"
         
@@ -207,9 +207,16 @@ if __name__ == "__main__":
         default="base_reference/resume_reference_1.tex",
         help="Path to the base .tex resume template used as reference",
     )
-    parser.add_argument("--model", default="gemini-2.0-flash", help="Gemini model name")
-    parser.add_argument("--api-key", dest="api_key", default=None, help="Google/Gemini API key")
+    parser.add_argument("--model", default="gemini-2.0-flash", help="Model name")
+    parser.add_argument("--api-key", dest="api_key", default=None, help="API key")
+    parser.add_argument("--provider", default=None, help="LLM provider: 'google' or 'deepseek'")
+    parser.add_argument("--api-base", default=None, help="Custom API base URL")
     args = parser.parse_args()
+
+    if args.provider:
+        os.environ["LLM_PROVIDER"] = args.provider
+    if args.api_base:
+        os.environ["DEEPSEEK_API_BASE"] = args.api_base
 
     try:
         txt_to_resume_latex(

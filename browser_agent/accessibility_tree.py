@@ -460,24 +460,39 @@ class AccessibilityTreeTool(BaseTool):
     async def cleanup(self):
         """Clean up browser resources"""
         logger.info("Cleaning up browser resources")
+        if self._context:
+            try:
+                for p in list(self._context.pages):
+                    try:
+                        if not p.is_closed():
+                            await p.close()
+                    except Exception as pe:
+                        if "closed" not in str(pe).lower():
+                            logger.warning(f"Error closing individual tab: {pe}")
+            except Exception as ce:
+                logger.warning(f"Error iterating context pages: {ce}")
+
         if self._browser:
             try:
                 await self._browser.close()
             except Exception as e:
-                logger.error(f"Error closing browser: {e}")
+                if "closed" not in str(e).lower():
+                    logger.error(f"Error closing browser: {e}")
             self._browser = None
         elif self._context:
             try:
                 await self._context.close()
             except Exception as e:
-                logger.error(f"Error closing context: {e}")
+                if "closed" not in str(e).lower():
+                    logger.error(f"Error closing context: {e}")
             self._context = None
             
         if getattr(self, "_playwright", None):
             try:
                 await self._playwright.stop()
             except Exception as e:
-                logger.error(f"Error stopping playwright: {e}")
+                if "closed" not in str(e).lower():
+                    logger.error(f"Error stopping playwright: {e}")
             self._playwright = None
             
         self._page = None

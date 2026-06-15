@@ -4,3 +4,4 @@ langchain-deepseek
 PyMuPDF
 playwright
 python-dotenv
+browser-use

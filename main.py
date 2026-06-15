@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -15,7 +16,13 @@ from latex_engine import LatexEngine
 
 LOGGER = logging.getLogger(__name__)
 
-def run_workflow(resume_pdf: str):
+def run_workflow(
+    resume_pdf: str,
+    model: str | None = None,
+    api_key: str | None = None,
+    provider: str | None = None,
+    api_base: str | None = None,
+):
     """
     Executes the end-to-end resume modification process:
       1. Parses text out of the resume PDF.
@@ -23,6 +30,17 @@ def run_workflow(resume_pdf: str):
       3. Tailors the LaTeX resume based on the Job Description.
       4. Compiles the modified LaTeX into a final PDF.
     """
+    if provider:
+        os.environ["LLM_PROVIDER"] = provider
+    if api_base:
+        os.environ["DEEPSEEK_API_BASE"] = api_base
+
+    kwargs = {}
+    if model:
+        kwargs["model"] = model
+    if api_key:
+        kwargs["api_key"] = api_key
+
     resume_pdf_path = Path(resume_pdf).expanduser().resolve()
     if not resume_pdf_path.exists():
         raise FileNotFoundError(f"Resume PDF not found: {resume_pdf_path}")
@@ -50,7 +68,8 @@ def run_workflow(resume_pdf: str):
         txt_path=str(temp_txt_path),
         output_dir=output_dir,
         output_name=f"{user_name_sanitized}_base_resume",
-        base_latex_path=str(PROJECT_ROOT / "base_reference" / "resume_reference_1.tex")
+        base_latex_path=str(PROJECT_ROOT / "base_reference" / "resume_reference_1.tex"),
+        **kwargs
     )
     LOGGER.info(f"Base LaTeX file generated at: {base_latex_file}")
     
@@ -60,7 +79,8 @@ def run_workflow(resume_pdf: str):
         latex_path=str(base_latex_file),
         jd_path=str(jd_file_path),
         output_dir=output_dir,
-        output_name=f"{user_name_sanitized}_tailored_resume"
+        output_name=f"{user_name_sanitized}_tailored_resume",
+        **kwargs
     )
     
     decision = result.get("decision")
@@ -97,12 +117,20 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="End-to-end Resume Tailoring Workflow")
     parser.add_argument("--resume-pdf", required=True, help="Path to the user's resume PDF")
+    parser.add_argument("--model", default=None, help="Model name")
+    parser.add_argument("--api-key", default=None, help="API key")
+    parser.add_argument("--provider", default=None, help="LLM provider: 'google' or 'deepseek'")
+    parser.add_argument("--api-base", default=None, help="Custom API base URL")
     
     args = parser.parse_args()
     
     try:
         run_workflow(
-            resume_pdf=args.resume_pdf
+            resume_pdf=args.resume_pdf,
+            model=args.model,
+            api_key=args.api_key,
+            provider=args.provider,
+            api_base=args.api_base,
         )
     except Exception as e:
         LOGGER.error(f"Workflow failed: {e}")
