@@ -6,7 +6,10 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from resume_to_latex.txt_to_latex_system_prompt import SYSTEM_PROMPT
+try:
+    from resume_to_latex.txt_to_latex_system_prompt import SYSTEM_PROMPT
+except ModuleNotFoundError:
+    from txt_to_latex_system_prompt import SYSTEM_PROMPT
 
 
 LOGGER = logging.getLogger(__name__)

@@ -119,55 +119,94 @@ class PersistentBrowserManager:
                     )
                     self.context = self.browser.new_context(no_viewport=True)
                 else:
+                    try:
+                        brave_path = self._find_brave_path()
+                        print(f"[PersistentBrowserManager] Launching Brave in INCOGNITO/NON-PERSISTENT mode from: {brave_path}")
+                        self.browser = self.playwright.chromium.launch(
+                            executable_path=brave_path,
+                            headless=False,
+                            args=[
+                                "--no-first-run",
+                                "--start-maximized"
+                            ]
+                        )
+                    except FileNotFoundError:
+                        print(f"[PersistentBrowserManager] Brave not found. Gracefully falling back to Playwright's bundled Chromium...")
+                        self.browser = self.playwright.chromium.launch(
+                            headless=False,
+                            args=[
+                                "--no-first-run",
+                                "--start-maximized"
+                            ]
+                        )
+                    self.context = self.browser.new_context(no_viewport=True)
+            elif self.browser_type == "firefox":
+                try:
+                    original_profile_path = self._find_firefox_profile_path()
+                    self.firefox_profile_copy_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), 
+                        ".firefox_profile_copy"
+                    )
+                    print(f"[PersistentBrowserManager] Copying Firefox profile from {original_profile_path} to {self.firefox_profile_copy_path}...")
+                    self._copy_firefox_profile(original_profile_path, self.firefox_profile_copy_path)
+                    
+                    print(f"[PersistentBrowserManager] Launching Playwright's bundled Firefox...")
+                    print(f"[PersistentBrowserManager] Using copied profile directory: {self.firefox_profile_copy_path}")
+                    
+                    self.context = self.playwright.firefox.launch_persistent_context(
+                        user_data_dir=self.firefox_profile_copy_path,
+                        headless=False,
+                        no_viewport=True,
+                        args=["-width", "1920", "-height", "1080"]
+                    )
+                except FileNotFoundError as e:
+                    print(f"[PersistentBrowserManager] Firefox profile not resolved: {e}. Gracefully falling back to default persistent Firefox context...")
+                    self.firefox_profile_copy_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), 
+                        ".firefox_profile_copy"
+                    )
+                    self.context = self.playwright.firefox.launch_persistent_context(
+                        user_data_dir=self.firefox_profile_copy_path,
+                        headless=False,
+                        no_viewport=True,
+                        args=["-width", "1920", "-height", "1080"]
+                    )
+            else:
+                # Default to Brave
+                try:
                     brave_path = self._find_brave_path()
-                    print(f"[PersistentBrowserManager] Launching Brave in INCOGNITO/NON-PERSISTENT mode from: {brave_path}")
-                    self.browser = self.playwright.chromium.launch(
+                    user_data_dir = self._get_brave_user_data_dir()
+                    profile_name = "Default"
+                    print(f"[PersistentBrowserManager] Launching Brave from: {brave_path}")
+                    print(f"[PersistentBrowserManager] Using user data dir: {user_data_dir} with profile: {profile_name}")
+                    print("IMPORTANT: Ensure all instances of Brave Browser are closed before running this script.")
+                    
+                    self.context = self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=user_data_dir,
                         executable_path=brave_path,
                         headless=False,
+                        no_viewport=True,
+                        args=[
+                            "--no-first-run",
+                            f"--profile-directory={profile_name}",
+                            "--start-maximized"
+                        ]
+                    )
+                except FileNotFoundError as e:
+                    print(f"[PersistentBrowserManager] Brave browser/profile not found: {e}. Gracefully falling back to Playwright's bundled Chromium default context...")
+                    fallback_user_dir = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        ".chromium_profile"
+                    )
+                    self.context = self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=fallback_user_dir,
+                        headless=False,
+                        no_viewport=True,
                         args=[
                             "--no-first-run",
                             "--start-maximized"
                         ]
                     )
-                    self.context = self.browser.new_context(no_viewport=True)
-            elif self.browser_type == "firefox":
-                original_profile_path = self._find_firefox_profile_path()
-                self.firefox_profile_copy_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), 
-                    ".firefox_profile_copy"
-                )
-                print(f"[PersistentBrowserManager] Copying Firefox profile from {original_profile_path} to {self.firefox_profile_copy_path}...")
-                self._copy_firefox_profile(original_profile_path, self.firefox_profile_copy_path)
-                
-                print(f"[PersistentBrowserManager] Launching Playwright's bundled Firefox...")
-                print(f"[PersistentBrowserManager] Using copied profile directory: {self.firefox_profile_copy_path}")
-                
-                self.context = self.playwright.firefox.launch_persistent_context(
-                    user_data_dir=self.firefox_profile_copy_path,
-                    headless=False,
-                    no_viewport=True,
-                    args=["-width", "1920", "-height", "1080"]
-                )
-            else:
-                # Default to Brave
-                brave_path = self._find_brave_path()
-                user_data_dir = self._get_brave_user_data_dir()
-                profile_name = "Default"
-                print(f"[PersistentBrowserManager] Launching Brave from: {brave_path}")
-                print(f"[PersistentBrowserManager] Using user data dir: {user_data_dir} with profile: {profile_name}")
-                print("IMPORTANT: Ensure all instances of Brave Browser are closed before running this script.")
-                
-                self.context = self.playwright.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    executable_path=brave_path,
-                    headless=False,
-                    no_viewport=True,
-                    args=[
-                        "--no-first-run",
-                        f"--profile-directory={profile_name}",
-                        "--start-maximized"
-                    ]
-                )
 
             # Register a page event listener to auto-switch tabs when a new page is opened
             def on_page_created(new_page: Page):
@@ -245,10 +284,14 @@ def clean_page_text(text: str) -> str:
     Cleans up the text content from a web page by collapsing whitespace
     and stripping boilerplate.
     """
-    # Collapse multiple spaces and newlines
-    text = re.sub(r'\s+', ' ', text)
+    # Normalize line endings
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    # Collapse multiple spaces and tabs per line, keeping newlines
+    text = re.sub(r'[ \t]+', ' ', text)
+    # Collapse multiple sequential newlines into a single newline
     text = re.sub(r'\n+', '\n', text)
     return text.strip()
+
 
 
 def get_accessibility_snapshot_sync(page: Page) -> Optional[dict]:
