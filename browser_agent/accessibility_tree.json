@@ -1,127 +1,588 @@
 [
   {
     "role": "link",
-    "name": "Skip to main content",
-    "url": "https://kimberlyclark.wd1.myworkdayjobs.com/en-US/GLOBAL/job/IT-Centre-Bengaluru-GDTC/AI-Engineer_88",
+    "name": "Naukri Logo",
+    "url": "https://www.naukri.com/",
     "focusable": true
   },
   {
     "role": "link",
-    "name": " search for jobs",
-    "url": "https://kimberlyclark.wd1.myworkdayjobs.com/en-US/GLOBAL",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "English",
-    "focusable": true,
-    "expanded": false
-  },
-  {
-    "role": "button",
-    "name": "Sign In",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "Search for Jobs",
+    "name": "Jobs 1",
+    "url": "https://www.naukri.com/mnjuser/recommendedjobs",
     "focusable": true
   },
   {
     "role": "link",
-    "name": "Back to Job Posting",
+    "name": "Recommended jobs",
+    "url": "https://www.naukri.com/mnjuser/recommendedjobs",
     "focusable": true
   },
   {
-    "role": "button",
-    "name": "Add",
+    "role": "link",
+    "name": "NVites",
+    "url": "https://www.naukri.com/mnjuser/inbox",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Application status 1 Update",
+    "url": "https://www.naukri.com/myapply/historypage",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Saved jobs",
+    "url": "https://www.naukri.com/mnjuser/savedjobs",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Companies",
+    "url": "https://www.naukri.com/companies-hiring-in-india?src=gnbCompanies_homepage_srch",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Explore categories"
+  },
+  {
+    "role": "link",
+    "name": "Unicorn",
+    "url": "https://www.naukri.com/unicorn-companies-in-india-cat102?title=Unicorns%20actively%20hiring&src=gnbC",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "MNC",
+    "url": "https://www.naukri.com/mnc-companies-in-india-cat101?title=MNCs%20actively%20hiring&src=gnbCompanies",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Startup",
+    "url": "https://www.naukri.com/startup-companies-in-india-cat103?title=Startups%20actively%20hiring&src=gnbC",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Product based",
+    "url": "https://www.naukri.com/product-companies-in-india-cat106?title=Product%20companies%20actively%20hiri",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Internet",
+    "url": "https://www.naukri.com/internet-companies-in-india-cat105?title=Internet%20companies%20actively%20hi",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Explore collections"
+  },
+  {
+    "role": "link",
+    "name": "Top companies",
+    "url": "https://www.naukri.com/companies-hiring-in-india?src=gnbCompanies_homepage_srch",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "IT companies",
+    "url": "https://www.naukri.com/it-companies-in-india-cat116?src=gnbCompanies_homepage_srch&title=IT%20Compan",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Fintech companies",
+    "url": "https://www.naukri.com/fintech-and-payments-companies-in-india-cat108?title=Fintech%20%26%20Payments",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Sponsored companies",
+    "url": "https://www.naukri.com/allcompanies?searchType=standardLogo&title=Sponsored+companies&branding=%257B",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Featured companies",
+    "url": "https://www.naukri.com/allcompanies?searchType=premiumLogo&title=Featured+companies+actively+hiring&",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Research companies by Ambitionbox"
+  },
+  {
+    "role": "link",
+    "name": "Interview questions",
+    "url": "https://www.ambitionbox.com/interviews?utm_source=naukri&utm_medium=desktop&utm_campaign=gnb",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Company salaries",
+    "url": "https://www.ambitionbox.com/salaries?utm_source=naukri&utm_medium=desktop&utm_campaign=gnb",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Company reviews",
+    "url": "https://www.ambitionbox.com/reviews?utm_source=naukri&utm_medium=desktop&utm_campaign=gnb",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Salary Calculator",
+    "url": "https://www.ambitionbox.com/salaries/take-home-salary-calculator?utm_campaign=gnb&utm_source=naukri&",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Services 1",
+    "url": "https://resume.naukri.com/?fftid=100001",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Resume writing"
+  },
+  {
+    "role": "link",
+    "name": "Text resume",
+    "url": "https://resume.naukri.com/resume-writing-services?fftid=101001",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Visual resume",
+    "url": "https://resume.naukri.com/visual-resume-writing-services?fftid=101002",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Resume critique",
+    "url": "https://resume.naukri.com/resume-critique?fftid=101006",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Find Jobs"
+  },
+  {
+    "role": "link",
+    "name": "Jobs4u",
+    "url": "https://resume.naukri.com/job-alerts-on-mobile-mail?fftid=101011#jobmail",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Priority applicant",
+    "url": "https://resume.naukri.com/priority-job-application?fftid=101019",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Contact us",
+    "url": "https://resume.naukri.com/contact-us?fftid=101015",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Get recruiter's attention"
+  },
+  {
+    "role": "link",
+    "name": "Resume display",
+    "url": "https://resume.naukri.com/resume-display?fftid=101009",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Interview Preparation"
+  },
+  {
+    "role": "link",
+    "name": "AI Mock Interview",
+    "url": "https://www.naukri.com/ai-interview-questions?fftid=NaukriGNBAIInterview",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Monthly subscriptions"
+  },
+  {
+    "role": "link",
+    "name": "Basic & premium plans",
+    "url": "https://resume.naukri.com/subscription-product?fftid=101025",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Free resume resources"
+  },
+  {
+    "role": "link",
+    "name": "Resume maker",
+    "url": "https://www.naukri.com/resume-maker?utmTerm=ResumePro_Gnb&utmContent=gnbServices",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Resume quality score",
+    "url": "https://resume.naukri.com/resume-quality-score?fftid=101003",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Resume samples",
+    "url": "https://resume.naukri.com/resume-samples?fftid=101004",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Job letter samples",
+    "url": "https://resume.naukri.com/job-letter-format",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Promotional Offer"
+  },
+  {
+    "role": "link",
+    "name": "FASTJOB20 20% off on services to help get more callbacks",
+    "url": "https://resume.naukri.com/resume-display?fftid=notf_nauk_promo_rd",
     "focusable": true
   },
   {
     "role": "textbox",
-    "name": "School or University",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "Degree Select One Required",
-    "focusable": true,
-    "expanded": true
-  },
-  {
-    "role": "textbox",
-    "name": "Field of Study",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "The field will alphabetically return the first 100 results and can also return s",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "Add Another",
+    "name": "Enter keyword / designation / companies",
     "focusable": true
   },
   {
     "role": "textbox",
-    "name": "Type to Add Skills",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "Select files",
+    "name": "Select experience",
     "focusable": true
   },
   {
     "role": "textbox",
-    "name": "LinkedIn Profile URL",
+    "name": "Enter location",
     "focusable": true
   },
   {
     "role": "button",
-    "name": "Back",
-    "focusable": true
-  },
-  {
-    "role": "button",
-    "name": "Next",
+    "name": "",
     "focusable": true
   },
   {
     "role": "link",
-    "name": "LinkedIn",
-    "url": "http://bit.ly/LinkedIn-KC",
+    "name": "naukri360-pill naukri360-pill naukri360-pill naukri360-pill naukri360-pill naukr",
+    "url": "https://www.naukri.com/naukri360",
     "focusable": true
   },
   {
     "role": "link",
-    "name": "Glassdoor",
-    "url": "http://bit.ly/Glassdoor-KC",
+    "name": "Neo-AI Job Agent ",
+    "url": "https://www.naukri.com/job-apply-agent?utmTerm=JobAgent_gnb&utmContent=gnbV1",
     "focusable": true
   },
   {
     "role": "link",
-    "name": "Facebook",
-    "url": "http://bit.ly/FB-KCCareers",
+    "name": "Naukri Pro ",
+    "url": "https://www.naukri.com/naukri360-pro?utm_term=N360Pro_gnb&utm_content=gnbV1",
     "focusable": true
   },
   {
     "role": "link",
-    "name": "YouTube",
-    "url": "http://bit.ly/YouTube-KC",
+    "name": "Resume Pro ",
+    "url": "https://www.naukri.com/resume-maker?utm_term=ResumePro_gnb&utm_content=gnbV1",
     "focusable": true
   },
   {
     "role": "link",
-    "name": "X",
-    "url": "http://bit.ly/TW-KCCareers",
+    "name": "Resume Writing Service ",
+    "url": "https://www.naukri.com/resume-writing-service?utmTerm=resume_gnb&utmContent=gnbV1",
     "focusable": true
   },
   {
-    "role": "listbox",
-    "name": "",
-    "focused": true,
+    "role": "link",
+    "name": "Interview Pro ",
+    "url": "https://www.naukri.com/mock-interview-questions?skipRole=true&utmTerm=InterviewPro_gnb&utmContent=gn",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "jobagent-pill"
+  },
+  {
+    "role": "link",
+    "name": "85 reviews",
+    "url": "https://www.ambitionbox.com/reviews/s-b-infowaves-reviews?utm_campaign=srp_ratings&utm_medium=deskto",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "3031 reviews",
+    "url": "https://www.ambitionbox.com/reviews/zensar-technologies-reviews?utm_campaign=srp_ratings&utm_medium=",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "310 reviews",
+    "url": "https://www.ambitionbox.com/reviews/cyber-infrastructure-reviews?utm_campaign=srp_ratings&utm_medium",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "416 reviews",
+    "url": "https://www.ambitionbox.com/reviews/enphase-energy-reviews?utm_campaign=srp_ratings&utm_medium=deskt",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "296 reviews",
+    "url": "https://www.ambitionbox.com/reviews/amnex-infotechnologies-reviews?utm_campaign=srp_ratings&utm_medi",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "19 reviews",
+    "url": "https://www.ambitionbox.com/reviews/adsparkx-media-reviews?utm_campaign=srp_ratings&utm_medium=deskt",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "18 reviews",
+    "url": "https://www.ambitionbox.com/reviews/mangoapps-reviews?utm_campaign=srp_ratings&utm_medium=desktop&ut",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "74601 reviews",
+    "url": "https://www.ambitionbox.com/reviews/accenture-reviews?utm_campaign=srp_ratings&utm_medium=desktop&ut",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "116008 reviews",
+    "url": "https://www.ambitionbox.com/reviews/tcs-reviews?utm_campaign=srp_ratings&utm_medium=desktop&utm_sour",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "74601 reviews",
+    "url": "https://www.ambitionbox.com/reviews/accenture-reviews?utm_campaign=srp_ratings&utm_medium=desktop&ut",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "54 reviews",
+    "url": "https://www.ambitionbox.com/reviews/syansoft-reviews?utm_campaign=srp_ratings&utm_medium=desktop&utm",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "74601 reviews",
+    "url": "https://www.ambitionbox.com/reviews/accenture-reviews?utm_campaign=srp_ratings&utm_medium=desktop&ut",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Security Guidelines",
+    "url": "https://my.naukri.com/faq/faq.php?pgid=9",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Terms and Conditions",
+    "url": "https://www.naukri.com/termsconditions",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Naukri Logo",
+    "url": "https://www.naukri.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri social icons",
+    "url": "https://www.facebook.com/Naukri",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri social icons",
+    "url": "https://instagram.com/naukridotcom/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri social icons",
+    "url": "https://twitter.com/naukri",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri social icons",
+    "url": "http://www.linkedin.com/company/naukri.com",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "About us",
+    "url": "https://infoedge.in/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Careers",
+    "url": "https://careers.infoedge.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Employer home",
+    "url": "https://www.naukri.com/recruit/login",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Sitemap",
+    "url": "https://www.naukri.com/sitemap/sitemap.php",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Credits",
+    "url": "https://www.naukri.com/credits",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Help center",
+    "url": "https://www.naukri.com/faq/job-seeker?utm_source=footer",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Summons/Notices",
+    "url": "https://w5.naukri.com/summons-notices-form/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Grievances",
+    "url": "https://w5.naukri.com/grievances-form/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Report issue",
+    "url": "https://w5.naukri.com/fdbck/main/feedback.php?app_id=15",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Privacy policy",
+    "url": "https://www.naukri.com/privacypolicy",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Terms & conditions",
+    "url": "https://www.naukri.com/termsconditions",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Fraud alert",
+    "url": "https://www.naukri.com/imposter/report-fake-job-recruiter",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "Trust & safety",
+    "url": "https://www.naukri.com/jobsearch/trust-safety",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri app download",
+    "url": "https://play.google.com/store/apps/details?id=naukriApp.appModules.login&hl=en&utm_source=naukri&utm",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri app download",
+    "url": "https://itunes.apple.com/in/app/naukri.com-job-search/id482877505?mt=8",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "naukri social logos",
+    "url": "http://infoedge.in/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "nnacres",
+    "url": "https://www.99acres.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "jeevansathi",
+    "url": "https://www.jeevansathi.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "ng",
+    "url": "https://www.naukrigulf.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "shiksha",
+    "url": "https://www.shiksha.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "iimjobs",
+    "url": "https://www.iimjobs.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "hirist",
+    "url": "https://www.hirist.tech/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "jobhai",
+    "url": "https://www.jobhai.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "doselect",
+    "url": "https://doselect.com/",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "minis",
+    "url": "https://www.naukri.com/minis",
+    "focusable": true
+  },
+  {
+    "role": "link",
+    "name": "codingninjas",
+    "url": "https://www.codingninjas.com/?utm_source=naukri&utm_medium=desktop-footer",
     "focusable": true
   }
 ]

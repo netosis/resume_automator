@@ -24,15 +24,20 @@ from browser_tools import (
     scroll_page,
     get_interactable_buttons,
     fetch_job_details,
-    naukri_job_fetch,
     click_apply_button,
-    search_naukri_via_url,
     close_browser_session,
     get_form_fields,
     select_dropdown_option,
     set_checkbox_state,
     upload_file,
-    PersistentBrowserManager
+    PersistentBrowserManager,
+    get_compressed_dom,
+    save_chat_transcript,
+    fill_entire_form
+)
+from naukri_tools import (
+    naukri_job_fetch,
+    search_naukri_via_url
 )
 
 # 1. Force Browser Incognito Mode
@@ -73,6 +78,13 @@ def invoke_model_with_retry(model, messages, max_retries=5, initial_delay=2.0):
 
 def run_apply_agent(target_url: str, resume_path: str):
     """Runs the LangChain Agent loop using the browser tools to apply for a job."""
+    # Check if the target URL is already a Workday URL
+    if "myworkdayjobs.com" in target_url or "workday" in target_url:
+        print(f"\n[Handoff]: Target URL '{target_url}' is a Workday application. Directly invoking Workday Agent...")
+        from workday_agent import run_workday_agent
+        run_workday_agent(resume_path=resume_path, target_url=target_url)
+        return
+
     provider = os.getenv("LLM_PROVIDER")
     if not provider:
         provider = "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "google"
@@ -93,6 +105,19 @@ def run_apply_agent(target_url: str, resume_path: str):
             model=model_name,
             api_key=api_key,
             api_base=api_base,
+            temperature=0.0
+        )
+    elif provider == "local":
+        api_base = os.getenv("LOCAL_API_BASE", "http://localhost:11434/v1")
+        model_name = os.getenv("LOCAL_MODEL", "qwen2.5")
+        api_key = os.getenv("LOCAL_API_KEY", "local")
+        
+        print(f"Initializing ChatOpenAI local model='{model_name}' at base='{api_base}'...")
+        from langchain_openai import ChatOpenAI
+        model = ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=api_base,
             temperature=0.0
         )
     else:
@@ -124,7 +149,9 @@ def run_apply_agent(target_url: str, resume_path: str):
         select_dropdown_option,
         set_checkbox_state,
         upload_file,
-        close_browser_session
+        close_browser_session,
+        get_compressed_dom,
+        fill_entire_form
     ]
 
     model_with_tools = model.bind_tools(tools)
@@ -140,61 +167,155 @@ def run_apply_agent(target_url: str, resume_path: str):
         "1. Open the website using the `open_website` tool.\n"
         "2. Locate and click the 'Apply Now' or 'Apply' button. If a new tab opens, the browser session will automatically follow it.\n"
         "3. Once the form is visible, call the `get_form_fields` tool to scan all the input fields and find their labels and selectors.\n"
-        "4. Fill out the application form with these details:\n"
-        "   - Full Name: John Doe\n"
-        "   - Email Address: johndoe@example.com\n"
-        f"   - Target Role: AI Systems Engineer (select this from the targetRole dropdown option)\n"
-        "   - Work Location Preference: Select 'Remote' (check the checkbox)\n"
-        f"   - Upload Resume: Upload the file located at: {resume_path}\n"
-        "   - Privacy Policy / Terms: Agree to terms (check the checkbox)\n"
+        "4. Fill out the entire application form at once using the `fill_entire_form` tool (instead of calling individual tools field-by-field) with a JSON list containing specifications for all the fields:\n"
+        "   - Full Name (text type): John Doe\n"
+        "   - Email Address (text type): johndoe@example.com\n"
+        "   - Target Role (select type): AI Systems Engineer (select this value or label)\n"
+        "   - Work Location Preference (checkbox/radio type): Remote (checked=True)\n"
+        f"   - Upload Resume (file type): Upload the file located at: {resume_path}\n"
+        "   - Privacy Policy / Terms (checkbox/radio type): Agree to terms (checked=True)\n"
         "5. Submit the application by clicking the submit button.\n"
         "6. Do not close the browser context. Keep the browser open so the final submission screen can be inspected.\n"
     )
 
     messages = [HumanMessage(content=prompt)]
+    llm_call_token_logs = []
+    
+    manager = PersistentBrowserManager.get_instance()
+    session_id = getattr(manager, "session_id", None) or time.strftime("%Y%m%d_%H%M%S")
 
-    max_steps = 15
-    for step in range(max_steps):
-        print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
-        try:
-            response = invoke_model_with_retry(model_with_tools, messages)
-        except Exception as e:
-            print(f"\n[Agent Error]: API call failed: {e}")
-            break
-            
-        messages.append(response)
+    try:
+        max_steps = 15
+        for step in range(max_steps):
+            # Dynamic check for redirection to Workday
+            try:
+                manager = PersistentBrowserManager.get_instance()
+                if manager.page and not manager.page.is_closed():
+                    current_url = manager.page.url
+                    if "myworkdayjobs.com" in current_url or "workday" in current_url:
+                        print(f"\n[Handoff]: Detected Workday form/redirection at '{current_url}'. Invoking Workday Agent...")
+                        from workday_agent import run_workday_agent
+                        run_workday_agent(resume_path=resume_path)
+                        print("[Handoff]: Workday Agent execution complete. Exiting main agent loop.")
+                        return
+            except Exception as e:
+                print(f"[Handoff Warning]: Failed to check browser state for Workday: {e}")
 
-        if response.content:
-            print(f"\n[Agent Thoughts]:\n{response.content}\n")
+            print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
+            try:
+                response = invoke_model_with_retry(model_with_tools, messages)
+            except Exception as e:
+                print(f"\n[Agent Error]: API call failed: {e}")
+                break
+                
+            messages.append(response)
+            save_chat_transcript("apply", messages, session_id)
 
-        if not response.tool_calls:
-            print("[Agent Execution Complete]")
-            break
+            llm_in = 0
+            llm_out = 0
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                llm_in = response.usage_metadata.get('input_tokens', 0)
+                llm_out = response.usage_metadata.get('output_tokens', 0)
 
-        for tool_call in response.tool_calls:
-            tool_name = tool_call["name"]
-            tool_args = tool_call["args"]
-            tool_id = tool_call["id"]
+            # Log to the unified session log file
+            try:
+                from browser_tools import log_api_call
+                log_api_call(
+                    caller_name="Main Agent Loop",
+                    model_name=model_name,
+                    input_tokens=llm_in,
+                    output_tokens=llm_out
+                )
+            except Exception as e:
+                print(f"[Agent Warning] Failed to log unified API call: {e}")
 
-            print(f"[Agent Tool Call]: {tool_name} with args {tool_args}")
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
+                    llm_call_token_logs.append({
+                        "step": step + 1,
+                        "tool_call_name": tool_call["name"],
+                        "llm_input_tokens": llm_in,
+                        "llm_output_tokens": llm_out
+                    })
+            else:
+                llm_call_token_logs.append({
+                    "step": step + 1,
+                    "tool_call_name": "none",
+                    "llm_input_tokens": llm_in,
+                    "llm_output_tokens": llm_out
+                })
 
-            matching_tool = next((t for t in tools if t.name == tool_name), None)
-            if matching_tool:
-                try:
-                    result = matching_tool.invoke(tool_args)
-                    result_str = str(result)
-                    print(f"[Tool Response]: {result_str[:400]}... [truncated for display]")
-                    messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
-                except Exception as e:
-                    error_msg = f"Error running tool '{tool_name}': {str(e)}"
+            if response.content:
+                print(f"\n[Agent Thoughts]:\n{response.content}\n")
+
+            if not response.tool_calls:
+                print("[Agent Execution Complete]")
+                break
+
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                tool_id = tool_call["id"]
+
+                print(f"[Agent Tool Call]: {tool_name} with args {tool_args}")
+
+                matching_tool = next((t for t in tools if t.name == tool_name), None)
+                if matching_tool:
+                    try:
+                        result = matching_tool.invoke(tool_args)
+                        result_str = str(result)
+                        print(f"[Tool Response]: {result_str[:400]}... [truncated for display]")
+                        messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                        save_chat_transcript("apply", messages, session_id)
+                    except Exception as e:
+                        error_msg = f"Error running tool '{tool_name}': {str(e)}"
+                        print(f"[Tool Error]: {error_msg}")
+                        messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
+                        save_chat_transcript("apply", messages, session_id)
+                else:
+                    error_msg = f"Tool '{tool_name}' is not registered."
                     print(f"[Tool Error]: {error_msg}")
                     messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
-            else:
-                error_msg = f"Tool '{tool_name}' is not registered."
-                print(f"[Tool Error]: {error_msg}")
-                messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
-    else:
-        print("[Agent Warning]: Reached maximum steps without completion.")
+                    save_chat_transcript("apply", messages, session_id)
+        else:
+            print("[Agent Warning]: Reached maximum steps without completion.")
+    except KeyboardInterrupt:
+        print("\n" + "="*50)
+        print("SESSION TOKEN USAGE SUMMARY (FORCE CLOSED)")
+        print("="*50)
+        total_in = sum(x.get("llm_input_tokens", 0) for x in llm_call_token_logs)
+        total_out = sum(x.get("llm_output_tokens", 0) for x in llm_call_token_logs)
+        print(f"LLM Calls:")
+        print(f"  Total Input Tokens:  {total_in}")
+        print(f"  Total Output Tokens: {total_out}")
+        print(f"  Total LLM Tokens:    {total_in + total_out}")
+        print("="*50 + "\n")
+        
+        save_chat_transcript("apply", messages, session_id)
+        
+        try:
+            log_dir = Path(__file__).parent.parent / "logs"
+            log_dir.mkdir(exist_ok=True)
+            llm_log_filename = log_dir / f"llm_call_token_usage_apply_{time.strftime('%Y%m%d_%H%M%S')}.json"
+            import json
+            with open(llm_log_filename, "w", encoding="utf-8") as f:
+                json.dump(llm_call_token_logs, f, indent=4)
+            print(f"[Apply Agent Token Logger] Dedicated LLM call token usage logged to: {llm_log_filename}")
+        except Exception as e:
+            print(f"[Apply Agent Token Logger Warning] Failed to save token log to file: {e}")
+        raise KeyboardInterrupt
+
+    # Write log file containing LLM call token usage
+    try:
+        log_dir = Path(__file__).parent.parent / "logs"
+        log_dir.mkdir(exist_ok=True)
+        llm_log_filename = log_dir / f"llm_call_token_usage_apply_{time.strftime('%Y%m%d_%H%M%S')}.json"
+        import json
+        with open(llm_log_filename, "w", encoding="utf-8") as f:
+            json.dump(llm_call_token_logs, f, indent=4)
+        print(f"[Apply Agent Token Logger] Dedicated LLM call token usage logged to: {llm_log_filename}")
+    except Exception as e:
+        print(f"[Apply Agent Token Logger Warning] Failed to save token log to file: {e}")
 
 if __name__ == "__main__":
     import argparse
@@ -217,4 +338,8 @@ if __name__ == "__main__":
     print(f"Target URL: {target_url}")
     print(f"Dummy Resume Path: {resume_path}")
     
-    run_apply_agent(target_url, resume_path)
+    try:
+        run_apply_agent(target_url, resume_path)
+    except KeyboardInterrupt:
+        print("\nExiting.")
+        sys.exit(0)

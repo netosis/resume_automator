@@ -1,7 +1,8 @@
 import os
 import re
 import json
-from typing import Optional, Dict, List, Any, Type
+import time
+from typing import Optional, Dict, List, Any, Type, Union
 from playwright.sync_api import sync_playwright, Playwright, BrowserContext, Page
 from langchain_core.tools import tool
 
@@ -19,7 +20,10 @@ class PersistentBrowserManager:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.browser_type: str = os.getenv("BROWSER_TYPE", "brave").lower()
+        self.browser_profile: str = os.getenv("BROWSER_PROFILE", "Default")
         self.incognito: bool = os.getenv("BROWSER_INCOGNITO", "false").lower() == "true"
+        self.session_id: str = time.strftime("%Y%m%d_%H%M%S")
+        self.api_call_logs: List[Dict[str, Any]] = []
 
     @classmethod
     def get_instance(cls) -> 'PersistentBrowserManager':
@@ -44,6 +48,24 @@ class PersistentBrowserManager:
     def _get_brave_user_data_dir(self) -> str:
         local_appdata = os.environ.get("LOCALAPPDATA") or os.path.join(os.environ["USERPROFILE"], r"AppData\Local")
         return os.path.join(local_appdata, r"BraveSoftware\Brave-Browser\User Data")
+
+    def _find_chrome_path(self) -> str:
+        possible_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(os.environ.get("USERPROFILE", ""), r"AppData\Local\Google\Chrome\Application\chrome.exe"),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        raise FileNotFoundError(
+            "Google Chrome executable was not found. Please verify Google Chrome is installed."
+        )
+
+    def _get_chrome_user_data_dir(self) -> str:
+        local_appdata = os.environ.get("LOCALAPPDATA") or os.path.join(os.environ["USERPROFILE"], r"AppData\Local")
+        return os.path.join(local_appdata, r"Google\Chrome\User Data")
 
     def _find_firefox_path(self) -> str:
         possible_paths = [
@@ -171,12 +193,48 @@ class PersistentBrowserManager:
                         no_viewport=True,
                         args=["-width", "1920", "-height", "1080"]
                     )
+            elif self.browser_type == "chrome":
+                # Launch Google Chrome
+                try:
+                    chrome_path = self._find_chrome_path()
+                    user_data_dir = self._get_chrome_user_data_dir()
+                    profile_name = self.browser_profile
+                    print(f"[PersistentBrowserManager] Launching Google Chrome from: {chrome_path}")
+                    print(f"[PersistentBrowserManager] Using user data dir: {user_data_dir} with profile: {profile_name}")
+                    print("IMPORTANT: Ensure all instances of Google Chrome are closed before running this script.")
+                    
+                    self.context = self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=user_data_dir,
+                        executable_path=chrome_path,
+                        headless=False,
+                        no_viewport=True,
+                        args=[
+                            "--no-first-run",
+                            f"--profile-directory={profile_name}",
+                            "--start-maximized"
+                        ]
+                    )
+                except FileNotFoundError as e:
+                    print(f"[PersistentBrowserManager] Chrome browser/profile not found: {e}. Gracefully falling back to Playwright's bundled Chromium default context...")
+                    fallback_user_dir = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        ".chromium_profile"
+                    )
+                    self.context = self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=fallback_user_dir,
+                        headless=False,
+                        no_viewport=True,
+                        args=[
+                            "--no-first-run",
+                            "--start-maximized"
+                        ]
+                    )
             else:
                 # Default to Brave
                 try:
                     brave_path = self._find_brave_path()
                     user_data_dir = self._get_brave_user_data_dir()
-                    profile_name = "Default"
+                    profile_name = self.browser_profile
                     print(f"[PersistentBrowserManager] Launching Brave from: {brave_path}")
                     print(f"[PersistentBrowserManager] Using user data dir: {user_data_dir} with profile: {profile_name}")
                     print("IMPORTANT: Ensure all instances of Brave Browser are closed before running this script.")
@@ -230,6 +288,14 @@ class PersistentBrowserManager:
         """
         Closes each individual tab, context, and stops Playwright.
         """
+        # Reset accessibility state cache
+        global _LAST_ACCESSIBILITY_STATE
+        _LAST_ACCESSIBILITY_STATE = {
+            "url": None,
+            "mode": None,
+            "json": None
+        }
+
         if self.context:
             try:
                 # Close each tab individually first
@@ -441,14 +507,36 @@ def prune_accessibility_tree(node: dict, mode: str = "interactive", depth: int =
 
 ACCESSIBILITY_TREE_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accessibility_tree.json")
 
+_LAST_ACCESSIBILITY_STATE = {
+    "url": None,
+    "mode": None,
+    "json": None
+}
 
-def get_accessibility_info(page: Page, mode: str = "interactive") -> str:
+
+def get_accessibility_info(page: Page, mode: str = "interactive") -> Union[str, bool]:
     """
     Retrieves the accessibility snapshot of the page, saves it to a json file, and returns a pruned/formatted version.
+    Returns the JSON string if there is a change in the accessibility tree, otherwise returns False.
     """
+    global _LAST_ACCESSIBILITY_STATE
     snapshot = get_accessibility_snapshot_sync(page)
     if not snapshot:
-        return "No accessibility tree available."
+        url = page.url
+        current_json = "No accessibility tree available."
+        is_changed = (
+            _LAST_ACCESSIBILITY_STATE.get("url") != url or
+            _LAST_ACCESSIBILITY_STATE.get("mode") != mode or
+            _LAST_ACCESSIBILITY_STATE.get("json") != current_json
+        )
+        if is_changed:
+            _LAST_ACCESSIBILITY_STATE = {
+                "url": url,
+                "mode": mode,
+                "json": current_json
+            }
+            return current_json
+        return False
     
     pruned = prune_accessibility_tree(snapshot, mode)
     
@@ -470,7 +558,258 @@ def get_accessibility_info(page: Page, mode: str = "interactive") -> str:
     if total_elements > 100:
         result["message"] = f"Showing first 100 of {total_elements} elements."
         
-    return json.dumps(result, indent=2)
+    current_json = json.dumps(result, indent=2)
+    url = page.url
+    
+    is_changed = (
+        _LAST_ACCESSIBILITY_STATE.get("url") != url or
+        _LAST_ACCESSIBILITY_STATE.get("mode") != mode or
+        _LAST_ACCESSIBILITY_STATE.get("json") != current_json
+    )
+    
+    if is_changed:
+        _LAST_ACCESSIBILITY_STATE = {
+            "url": url,
+            "mode": mode,
+            "json": current_json
+        }
+        return current_json
+    
+    return False
+
+
+COMPRESSED_DOM_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compressed_dom.json")
+
+_LAST_DOM_STATE = {
+    "url": None,
+    "mode": None,
+    "json": None
+}
+
+def get_compressed_dom_info(page: Page, mode: str = "interactive") -> Union[str, bool]:
+    """
+    Retrieves the compressed DOM of the page, saves it to a json file, and returns a formatted version.
+    Returns the JSON string if there is a change in the compressed DOM, otherwise returns False.
+    """
+    global _LAST_DOM_STATE
+    try:
+        # Evaluate DOM compression in browser
+        compressed_elements = page.evaluate(r'''
+            (mode) => {
+                function cleanText(text) {
+                    return text.replace(/\s+/g, ' ').trim();
+                }
+                
+                function isInteractive(el) {
+                    const tagName = el.tagName.toLowerCase();
+                    const role = el.getAttribute('role');
+                    const interactiveRoles = new Set([
+                        'button', 'link', 'checkbox', 'radio', 'combobox', 
+                        'listbox', 'menuitem', 'tab', 'slider', 'searchbox', 
+                        'spinbutton', 'switch', 'option', 'textbox'
+                    ]);
+                    const interactiveTags = new Set([
+                        'button', 'a', 'input', 'select', 'textarea', 'option', 'details', 'summary'
+                    ]);
+                    
+                    if (interactiveTags.has(tagName)) return true;
+                    if (role && interactiveRoles.has(role.toLowerCase())) return true;
+                    if (el.onclick || el.getAttribute('onclick')) return true;
+                    return false;
+                }
+                
+                function getUniqueSelector(el) {
+                    if (el.id) {
+                        return `#${el.id}`;
+                    }
+                    let attrTests = ['data-testid', 'data-test-id', 'data-qa', 'name', 'placeholder'];
+                    for (let attr of attrTests) {
+                        let val = el.getAttribute(attr);
+                        if (val) {
+                            let safeVal = val.replace(/"/g, '\\"');
+                            let sel = `[${attr}="${safeVal}"]`;
+                            try {
+                                if (document.querySelectorAll(sel).length === 1) {
+                                    return sel;
+                                }
+                            } catch(e) {}
+                        }
+                    }
+                    
+                    let path = [];
+                    let parent = el;
+                    while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+                        let tag = parent.tagName.toLowerCase();
+                        if (parent.id) {
+                            path.unshift(`#${parent.id}`);
+                            break;
+                        } else {
+                            let siblings = Array.from(parent.parentNode ? parent.parentNode.children : []);
+                            let index = siblings.indexOf(parent) + 1;
+                            path.unshift(`${tag}:nth-child(${index})`);
+                        }
+                        parent = parent.parentNode;
+                    }
+                    return path.join(' > ');
+                }
+                
+                const results = [];
+                const ignoredTags = new Set([
+                    'script', 'style', 'noscript', 'iframe', 'svg', 'path', 'g', 'meta', 'head', 'link'
+                ]);
+                
+                function traverse(el) {
+                    const tagName = el.tagName.toLowerCase();
+                    if (ignoredTags.has(tagName)) return;
+                    
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 && rect.height === 0) return;
+                    if (window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden') return;
+                    
+                    let directText = "";
+                    for (let child of el.childNodes) {
+                        if (child.nodeType === Node.TEXT_NODE) {
+                            directText += child.nodeValue;
+                        }
+                    }
+                    directText = cleanText(directText);
+                    
+                    const isSelfInteractive = isInteractive(el);
+                    
+                    let isRelevant = false;
+                    if (mode === 'interactive') {
+                        isRelevant = isSelfInteractive;
+                    } else if (mode === 'reading') {
+                        const contentTags = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'span', 'div']);
+                        isRelevant = isSelfInteractive || (contentTags.has(tagName) && directText.length > 5);
+                    } else { // full
+                        isRelevant = isSelfInteractive || directText.length > 0;
+                    }
+                    
+                    if (isRelevant) {
+                        const selector = getUniqueSelector(el);
+                        const item = {
+                            tag: tagName,
+                            selector: selector
+                        };
+                        
+                        if (directText) {
+                            item.text = directText.slice(0, 100);
+                        }
+                        
+                        if (tagName === 'input') {
+                            item.type = el.type || 'text';
+                            if (el.placeholder) item.placeholder = el.placeholder;
+                            if (el.value) item.value = el.value;
+                            if (el.checked) item.checked = true;
+                            if (el.disabled) item.disabled = true;
+                        } else if (tagName === 'textarea') {
+                            if (el.placeholder) item.placeholder = el.placeholder;
+                            if (el.value) item.value = el.value;
+                            if (el.disabled) item.disabled = true;
+                        } else if (tagName === 'select') {
+                            if (el.value) item.value = el.value;
+                            if (el.disabled) item.disabled = true;
+                        }
+                        
+                        if (el.getAttribute('placeholder') && !item.placeholder) item.placeholder = el.getAttribute('placeholder');
+                        if (el.getAttribute('aria-label')) item.ariaLabel = el.getAttribute('aria-label');
+                        if (el.getAttribute('name')) item.name = el.getAttribute('name');
+                        if (el.getAttribute('role')) item.role = el.getAttribute('role');
+                        if (el.disabled) item.disabled = true;
+                        
+                        results.push(item);
+                    }
+                    
+                    for (let child of el.children) {
+                        traverse(child);
+                    }
+                }
+                
+                traverse(document.body);
+                return results;
+            }
+        ''', mode)
+    except Exception as e:
+        print(f"[PersistentBrowserManager] Error compressing DOM: {e}")
+        return "Failed to compress DOM."
+
+    if not compressed_elements:
+        url = page.url
+        current_json = "No compressed DOM elements available."
+        is_changed = (
+            _LAST_DOM_STATE.get("url") != url or
+            _LAST_DOM_STATE.get("mode") != mode or
+            _LAST_DOM_STATE.get("json") != current_json
+        )
+        if is_changed:
+            _LAST_DOM_STATE = {
+                "url": url,
+                "mode": mode,
+                "json": current_json
+            }
+            return current_json
+        return False
+
+    # Save the pruned tree to compressed_dom.json
+    try:
+        with open(COMPRESSED_DOM_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(compressed_elements, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[get_compressed_dom_info] Warning: failed to save compressed DOM JSON: {e}")
+
+    total_elements = len(compressed_elements)
+    limited_elements = compressed_elements[:100]
+
+    result = {
+        "mode": mode,
+        "total_elements": total_elements,
+        "elements": limited_elements
+    }
+    if total_elements > 100:
+        result["message"] = f"Showing first 100 of {total_elements} elements."
+
+    current_json = json.dumps(result, indent=2)
+    url = page.url
+
+    is_changed = (
+        _LAST_DOM_STATE.get("url") != url or
+        _LAST_DOM_STATE.get("mode") != mode or
+        _LAST_DOM_STATE.get("json") != current_json
+    )
+
+    if is_changed:
+        _LAST_DOM_STATE = {
+            "url": url,
+            "mode": mode,
+            "json": current_json
+        }
+        return current_json
+    return False
+
+def get_representation_header_and_body(page: Page, mode: str) -> tuple:
+    if mode.startswith("dom_"):
+        dom_mode = mode.split("dom_", 1)[1]
+        dom_info = get_compressed_dom_info(page, dom_mode)
+        return f"Compressed DOM ({dom_mode} mode)", dom_info
+    else:
+        a11y_info = get_accessibility_info(page, mode)
+        return f"Accessibility Tree ({mode} mode)", a11y_info
+
+@tool
+def get_compressed_dom(mode: str = "interactive") -> Union[str, bool]:
+    """
+    Retrieves a compressed, token-efficient DOM representation of the currently active page.
+    mode: Can be 'interactive' (buttons, links, inputs), 'reading' (headings, paragraphs, text elements), or 'full'.
+    Returns the compressed DOM of the current page if it has changed since the last retrieval, otherwise False.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        dom_info = get_compressed_dom_info(page, mode)
+        return dom_info
+    except Exception as e:
+        return f"Failed to retrieve compressed DOM. Error: {str(e)}"
 
 
 # LangChain Tools definitions
@@ -480,7 +819,7 @@ def open_website(url: str, mode: str = "interactive") -> str:
     """
     Launches the configured browser (if not already open) and navigates to the specified URL.
     Use this to open job boards like naukri.com, glassdoor.com, linkedin.com, or general links.
-    Returns page title, current URL, and the pruned accessibility tree of the page.
+    Returns page title, current URL, and the pruned accessibility tree of the page if it has changed, otherwise False.
     """
     try:
         # Standardize URL
@@ -499,10 +838,10 @@ def open_website(url: str, mode: str = "interactive") -> str:
         title = page.title()
         current_url = page.url
         
-        a11y_info = get_accessibility_info(page, mode)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully opened {current_url}. Page Title: '{title}'.\n\n"
-            f"Accessibility Tree ({mode} mode):\n{a11y_info}"
+            f"{rep_header}:\n{rep_body}"
         )
     except Exception as e:
         return f"Failed to navigate to {url}. Error: {str(e)}"
@@ -537,7 +876,7 @@ def click_on_element(selector: str, mode: str = "interactive") -> str:
     """
     Clicks on a web element using a CSS selector or text pattern (e.g., 'button.search', 'text=Apply Now').
     Use this to interact with buttons, search buttons, links, or checkmarks.
-    Returns confirmation and the updated pruned accessibility tree.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -565,7 +904,7 @@ def click_on_element(selector: str, mode: str = "interactive") -> str:
                 manager.page = latest_page
         
         current_page = manager.get_page()
-        a11y_info = get_accessibility_info(current_page, mode)
+        rep_header, rep_body = get_representation_header_and_body(current_page, mode)
         
         if current_page != old_page:
             return (
@@ -573,12 +912,12 @@ def click_on_element(selector: str, mode: str = "interactive") -> str:
                 f"NOTICE: A new tab was opened and the browser session automatically switched to it.\n"
                 f"New Tab URL: '{current_page.url}'\n"
                 f"New Tab Title: '{current_page.title()}'\n\n"
-                f"Accessibility Tree of the NEW tab ({mode} mode):\n{a11y_info}"
+                f"{rep_header} of the NEW tab:\n{rep_body}"
             )
         else:
             return (
                 f"Successfully clicked the element: '{selector}'.\n\n"
-                f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+                f"{rep_header}:\n{rep_body}"
             )
     except Exception as e:
         return f"Failed to click element '{selector}'. Error: {str(e)}"
@@ -589,7 +928,7 @@ def input_text_into_element(selector: str, text: str, mode: str = "interactive")
     """
     Inputs/types text into a web input field matching the CSS selector (e.g., 'input[name="q"]', 'input#search-box').
     Use this to fill in search terms, search boxes, usernames, or application details.
-    Returns confirmation and the updated pruned accessibility tree.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -607,10 +946,10 @@ def input_text_into_element(selector: str, text: str, mode: str = "interactive")
         # Wait a moment for dynamic page updates after typing
         page.wait_for_timeout(1000)
         
-        a11y_info = get_accessibility_info(page, mode)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully typed '{text}' into element: '{selector}'.\n\n"
-            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+            f"{rep_header}:\n{rep_body}"
         )
     except Exception as e:
         return f"Failed to type into element '{selector}'. Error: {str(e)}"
@@ -621,7 +960,7 @@ def scroll_page(direction: str, mode: str = "interactive") -> str:
     """
     Scrolls the page 'down' or 'up' to trigger loading of dynamic content (like continuous scrolling on LinkedIn or Naukri).
     direction: Must be either 'down' or 'up'.
-    Returns confirmation and the updated pruned accessibility tree.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -638,10 +977,10 @@ def scroll_page(direction: str, mode: str = "interactive") -> str:
         else:
             return "Invalid direction. Please specify 'down' or 'up'."
             
-        a11y_info = get_accessibility_info(page, mode)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"{status}\n\n"
-            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+            f"{rep_header}:\n{rep_body}"
         )
     except Exception as e:
         return f"Failed to scroll page. Error: {str(e)}"
@@ -708,11 +1047,11 @@ def get_interactable_buttons() -> str:
 
 
 @tool
-def get_accessibility_tree(mode: str = "interactive") -> str:
+def get_accessibility_tree(mode: str = "interactive") -> Union[str, bool]:
     """
     Retrieves the accessibility tree of the currently active page.
     mode: Can be 'interactive' (buttons, links, textboxes), 'reading' (headings, text), or 'full'.
-    Returns the pruned accessibility tree of the current page.
+    Returns the pruned accessibility tree of the current page if it has changed since the last retrieval, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -755,8 +1094,10 @@ def fetch_job_details() -> str:
 @tool
 def click_apply_button(mode: str = "interactive") -> str:
     """
-    Searches the current page for visible 'Apply', 'Apply on Company Site', or similar buttons/links and clicks them.
+    Searches the current page for visible 'Apply', 'Apply on Company Site', 'Apply with Indeed',
+    'Submit your application', 'Continue', 'Next', or similar buttons/links and clicks them.
     Automatically detects if a new tab was opened, switches the active browser session to the new tab, and returns its content.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -769,9 +1110,14 @@ def click_apply_button(mode: str = "interactive") -> str:
                 const patterns = [
                     /^apply$/i,
                     /^apply\s+now$/i,
+                    /apply\s+with\s+indeed/i,
+                    /submit\s+your\s+application/i,
+                    /submit\s+application/i,
                     /apply\s+on\s+(company\s+)?site/i,
                     /easy\s+apply/i,
                     /apply\s+on\s+company\s+website/i,
+                    /continue/i,
+                    /next/i,
                     /apply/i
                 ];
                 
@@ -825,7 +1171,7 @@ def click_apply_button(mode: str = "interactive") -> str:
                 manager.page = latest_page
                 
         current_page = manager.get_page()
-        a11y_info = get_accessibility_info(current_page, mode)
+        rep_header, rep_body = get_representation_header_and_body(current_page, mode)
         
         if current_page != old_page:
             return (
@@ -833,95 +1179,16 @@ def click_apply_button(mode: str = "interactive") -> str:
                 f"NOTICE: A new tab was opened and the browser session automatically switched to it.\n"
                 f"New Tab URL: '{current_page.url}'\n"
                 f"New Tab Title: '{current_page.title()}'\n\n"
-                f"Accessibility Tree of the NEW tab ({mode} mode):\n{a11y_info}"
+                f"{rep_header} of the NEW tab:\n{rep_body}"
             )
         else:
             return (
                 f"Successfully clicked the Apply element: '{target_info['text']}'.\n\n"
-                f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+                f"{rep_header}:\n{rep_body}"
             )
             
     except Exception as e:
         return f"Failed to locate or click the Apply button. Error: {str(e)}"
-
-
-@tool
-def naukri_job_fetch() -> str:
-    """
-    Retrieves job details from the current page by locating and cleaning elements with class 'srp-jobtuple-wrapper'.
-    Only use this on naukri.com search result pages.
-    """
-    try:
-        manager = PersistentBrowserManager.get_instance()
-        page = manager.get_page()
-        
-        # Get page URL and title
-        url = page.url
-        title = page.title()
-        
-        # Locate all job cards matching `.srp-jobtuple-wrapper`
-        job_cards_locator = page.locator(".srp-jobtuple-wrapper")
-        card_count = job_cards_locator.count()
-        
-        job_cards_details = []
-        for i in range(card_count):
-            card = job_cards_locator.nth(i)
-            # Retrieve HTML, strip HTML tags, and clean whitespace
-            card_html = card.inner_html()
-            # Clean HTML by removing tags and normal whitespace cleaning
-            clean_text = re.sub(r'<[^>]*>', ' ', card_html)
-            clean_text = clean_page_text(clean_text)
-            job_cards_details.append(f"Job Listing {i + 1}:\n{clean_text}")
-            
-        method_b_content = "\n\n".join(job_cards_details)
-        if not method_b_content:
-            method_b_content = "No elements with class 'srp-jobtuple-wrapper' found on this page."
-            
-        return (
-            f"Job Page URL: {url}\n"
-            f"Page Title: {title}\n\n"
-            f"Job Details from job cards:\n{method_b_content}"
-        )
-    except Exception as e:
-        return f"Failed to fetch naukri job details. Error: {str(e)}"
-
-
-@tool
-def search_naukri_via_url(job_title: str) -> str:
-    """
-    Searches for jobs on naukri.com by directly modifying the URL pattern (e.g. 'naukri.com/ai-engineer-jobs')
-    instead of using search boxes and buttons.
-    When calling this tool, the LLM should ONLY provide the job role name (e.g., 'AI Engineer') for the 'job_title' parameter.
-    Returns the confirmation of navigation and the updated accessibility tree.
-    """
-    mode = "interactive"
-    try:
-        # Standardize job title: convert to lowercase, strip, replace spaces/special chars with hyphens
-        sanitized_title = job_title.lower().strip()
-        sanitized_title = re.sub(r'[^a-z0-9]+', '-', sanitized_title)
-        sanitized_title = sanitized_title.strip('-')
-        
-        url = f"https://www.naukri.com/{sanitized_title}-jobs"
-        
-        manager = PersistentBrowserManager.get_instance()
-        page = manager.get_page()
-        
-        print(f"[Tool: search_naukri_via_url] Navigating to direct search URL: {url}")
-        page.goto(url, wait_until="load")
-        
-        # Wait a small moment for dynamic loads
-        page.wait_for_timeout(1500)
-        
-        title = page.title()
-        current_url = page.url
-        
-        a11y_info = get_accessibility_info(page, mode)
-        return (
-            f"Successfully navigated to direct search URL: {current_url}. Page Title: '{title}'.\n\n"
-            f"Accessibility Tree ({mode} mode):\n{a11y_info}"
-        )
-    except Exception as e:
-        return f"Failed to search naukri via URL. Error: {str(e)}"
 
 
 @tool
@@ -1061,7 +1328,7 @@ def select_dropdown_option(selector: str, option_value_or_text: str, mode: str =
     """
     Selects an option from a drop-down (<select>) element matching the CSS selector.
     The option can be selected by its value attribute or visible text.
-    Returns confirmation and the updated pruned accessibility tree.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -1084,10 +1351,10 @@ def select_dropdown_option(selector: str, option_value_or_text: str, mode: str =
                 locator.select_option(option_value_or_text)
             
         page.wait_for_timeout(1000)
-        a11y_info = get_accessibility_info(page, mode)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully selected option '{option_value_or_text}' from element: '{selector}'.\n\n"
-            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+            f"{rep_header}:\n{rep_body}"
         )
     except Exception as e:
         return f"Failed to select option from element '{selector}'. Error: {str(e)}"
@@ -1098,7 +1365,7 @@ def set_checkbox_state(selector: str, checked: bool, mode: str = "interactive") 
     """
     Checks or unchecks a checkbox or radio button element matching the CSS selector.
     checked: True to check / select, False to uncheck / deselect.
-    Returns confirmation and the updated pruned accessibility tree.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -1115,10 +1382,10 @@ def set_checkbox_state(selector: str, checked: bool, mode: str = "interactive") 
             locator.uncheck()
             
         page.wait_for_timeout(1000)
-        a11y_info = get_accessibility_info(page, mode)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully set state of element '{selector}' to checked={checked}.\n\n"
-            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+            f"{rep_header}:\n{rep_body}"
         )
     except Exception as e:
         return f"Failed to set state of element '{selector}'. Error: {str(e)}"
@@ -1129,7 +1396,7 @@ def upload_file(selector: str, file_path: str, mode: str = "interactive") -> str
     """
     Uploads a local file to a file input element matching the CSS selector.
     file_path: Absolute or relative path to the file to upload.
-    Returns confirmation and the updated pruned accessibility tree.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
     """
     try:
         manager = PersistentBrowserManager.get_instance()
@@ -1146,10 +1413,10 @@ def upload_file(selector: str, file_path: str, mode: str = "interactive") -> str
         locator.set_input_files(abs_path)
         
         page.wait_for_timeout(1500)
-        a11y_info = get_accessibility_info(page, mode)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully uploaded file '{abs_path}' to element: '{selector}'.\n\n"
-            f"Updated Accessibility Tree ({mode} mode):\n{a11y_info}"
+            f"{rep_header}:\n{rep_body}"
         )
     except Exception as e:
         return f"Failed to upload file to element '{selector}'. Error: {str(e)}"
@@ -1246,6 +1513,268 @@ def generate_fill_values(fields_json: str) -> str:
 
 
 @tool
+def fill_entire_form(fields_data_json: str, mode: str = "interactive") -> str:
+    """
+    Fills out multiple form fields on the current page at once using Playwright.
+    fields_data_json: A JSON string containing a list of objects representing fields to fill.
+    Each field object MUST have:
+      - 'selector': The CSS selector of the element to interact with.
+      - 'value': The target text, option value, custom option text, or boolean checked state.
+      - 'type': The interaction type. Must be one of:
+         * 'text': For text inputs, textareas, etc. (uses fill and type).
+         * 'select': For standard HTML <select> elements.
+         * 'checkbox' (or 'radio'): For checkboxes or radio buttons (checked state is boolean).
+         * 'custom_combobox': For custom dropdowns (clicks the combobox, then selects the option matching value).
+         * 'file': For uploading a file (value is the local file path).
+    
+    Example format:
+    [
+      {"selector": "input[name='firstName']", "value": "John", "type": "text"},
+      {"selector": "select[name='country']", "value": "US", "type": "select"},
+      {"selector": "input[type='checkbox']", "value": true, "type": "checkbox"},
+      {"selector": "#source--source", "value": "LinkedIn", "type": "custom_combobox"},
+      {"selector": "input[type='file']", "value": "browser_agent/testcode/dummy_resume.pdf", "type": "file"}
+    ]
+    
+    Returns confirmation and the updated pruned accessibility tree after all fields are filled.
+    """
+    try:
+        cleaned_json = fields_data_json.strip()
+        if cleaned_json.startswith("```json"):
+            cleaned_json = cleaned_json[7:]
+        if cleaned_json.startswith("```"):
+            cleaned_json = cleaned_json[3:]
+        if cleaned_json.endswith("```"):
+            cleaned_json = cleaned_json[:-3]
+        cleaned_json = cleaned_json.strip()
+        
+        fields = json.loads(cleaned_json)
+        if not isinstance(fields, list):
+            return "Error: Input fields_data_json must parse to a JSON list of dictionaries."
+            
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        results = []
+        for idx, field in enumerate(fields):
+            if not isinstance(field, dict):
+                results.append(f"Field {idx}: skipped (not a dictionary)")
+                continue
+                
+            selector = field.get("selector")
+            value = field.get("value")
+            field_type = field.get("type", "text").lower()
+            
+            if not selector:
+                results.append(f"Field {idx}: skipped (missing selector)")
+                continue
+                
+            try:
+                locator = page.locator(selector).first
+                locator.scroll_into_view_if_needed()
+                
+                if field_type == "text":
+                    locator.fill("")
+                    locator.type(str(value), delay=30)
+                    page.wait_for_timeout(200)
+                    results.append(f"Filled '{value}' into '{selector}'")
+                    
+                elif field_type == "select":
+                    val_str = str(value)
+                    try:
+                        locator.select_option(value=val_str)
+                    except Exception:
+                        try:
+                            locator.select_option(label=val_str)
+                        except Exception:
+                            locator.select_option(val_str)
+                    page.wait_for_timeout(300)
+                    results.append(f"Selected option '{value}' in '{selector}'")
+                    
+                elif field_type in ("checkbox", "radio"):
+                    checked = bool(value)
+                    if checked:
+                        locator.check()
+                    else:
+                        locator.uncheck()
+                    page.wait_for_timeout(200)
+                    results.append(f"Set checked={checked} for '{selector}'")
+                    
+                elif field_type == "custom_combobox":
+                    val_str = str(value)
+                    locator.click()
+                    page.wait_for_timeout(600)
+                    
+                    option_locator = page.locator('[role="option"]').filter(has_text=val_str).first
+                    if not option_locator.is_visible():
+                        option_locator = page.locator(f'text="{val_str}"').first
+                    if not option_locator.is_visible():
+                        option_locator = page.locator(f'[role="listbox"] >> text="{val_str}"').first
+                        
+                    if option_locator.is_visible():
+                        option_locator.click()
+                        page.wait_for_timeout(400)
+                        results.append(f"Selected custom option '{val_str}' in '{selector}'")
+                    else:
+                        # Fallback: type and enter
+                        tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
+                        is_input = tag_name == "input" or locator.get_attribute("role") == "combobox"
+                        if is_input:
+                            locator.fill("")
+                            locator.type(val_str, delay=50)
+                            page.wait_for_timeout(300)
+                            page.keyboard.press("Enter")
+                            page.wait_for_timeout(400)
+                            results.append(f"Typed and entered '{val_str}' into custom combobox '{selector}'")
+                        else:
+                            results.append(f"Warning: Option '{val_str}' not found and custom selector is not input for '{selector}'")
+                            
+                elif field_type == "file":
+                    abs_path = os.path.abspath(str(value))
+                    if not os.path.exists(abs_path):
+                        results.append(f"Error: File to upload not found at {abs_path} for '{selector}'")
+                    else:
+                        locator.set_input_files(abs_path)
+                        page.wait_for_timeout(500)
+                        results.append(f"Uploaded '{abs_path}' to '{selector}'")
+                        
+                else:
+                    results.append(f"Field {idx}: skipped (unknown type '{field_type}')")
+                    
+            except Exception as e:
+                results.append(f"Error executing field '{selector}': {str(e)}")
+                
+        page.wait_for_timeout(1000)
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
+        
+        summary = "Form filling execution summary:\n" + "\n".join(f" - {res}" for res in results)
+        return f"{summary}\n\n{rep_header}:\n{rep_body}"
+        
+    except Exception as e:
+        return f"Failed to execute fill_entire_form. Error: {str(e)}"
+
+
+@tool
+def select_custom_combobox_option(selector: str, option_text: str, mode: str = "interactive") -> str:
+    """
+    Selects an option from a custom combobox/dropdown button (like Workday's dropdowns)
+    which is not a standard HTML <select> element.
+    It clicks the combobox button/input, waits for the dropdown menu (e.g., listbox, list of options)
+    to appear, finds the option containing the target option_text, and clicks it.
+    Use this for selecting sources ("How did you hear about us?"), countries, or other custom Workday dropdowns.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        # Locate the combobox button and scroll to it
+        locator = page.locator(selector).first
+        locator.scroll_into_view_if_needed()
+        
+        print(f"[Tool: select_custom_combobox_option] Clicking dropdown button/combobox: {selector}")
+        locator.click()
+        
+        # Wait for potential dropdown menu/listbox/options to be visible
+        page.wait_for_timeout(1000)
+        
+        # Look for option elements with role="option" or containing option_text
+        option_locator = page.locator('[role="option"]').filter(has_text=option_text).first
+        
+        # Fallback 1: search elements with text match directly in case role isn't option
+        if not option_locator.is_visible():
+            option_locator = page.locator(f'text="{option_text}"').first
+            
+        # Fallback 2: search inside listbox
+        if not option_locator.is_visible():
+            option_locator = page.locator(f'[role="listbox"] >> text="{option_text}"').first
+            
+        if option_locator.is_visible():
+            print(f"[Tool: select_custom_combobox_option] Clicking option containing: '{option_text}'")
+            option_locator.click()
+            page.wait_for_timeout(1000)
+            rep_header, rep_body = get_representation_header_and_body(page, mode)
+            return (
+                f"Successfully selected option '{option_text}' from custom dropdown: '{selector}'.\n\n"
+                f"{rep_header}:\n{rep_body}"
+            )
+        else:
+            # Maybe the dropdown requires searching/typing first?
+            # Let's try typing the option_text into the input/button if it is an input field
+            tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
+            is_input = tag_name == "input" or locator.get_attribute("role") == "combobox"
+            if is_input:
+                print(f"[Tool: select_custom_combobox_option] Option list not visible. Attempting to type '{option_text}' and press Enter...")
+                locator.fill("")
+                locator.type(option_text, delay=100)
+                page.wait_for_timeout(500)
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(1000)
+                rep_header, rep_body = get_representation_header_and_body(page, mode)
+                return (
+                    f"Attempted to type and enter option '{option_text}' into: '{selector}'.\n\n"
+                    f"{rep_header}:\n{rep_body}"
+                )
+            
+            return f"Failed to locate option '{option_text}' after clicking dropdown '{selector}'."
+    except Exception as e:
+        return f"Failed to select custom dropdown option. Error: {str(e)}"
+
+
+@tool
+def close_current_tab() -> str:
+    """
+    Closes the currently active browser tab and switches to the last remaining open tab.
+    Use this when a new tab was opened (e.g., after clicking a link or Apply) and you are done with it.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        if not manager.context:
+            return "No active browser context to close a tab from."
+            
+        pages = [p for p in manager.context.pages if not p.is_closed()]
+        if len(pages) <= 1:
+            return "Cannot close the current tab because it is the only tab open. Use close_browser_session if you want to close the browser."
+            
+        current_page = manager.page
+        current_page.close()
+        
+        # Switch to the last remaining page
+        remaining_pages = [p for p in manager.context.pages if not p.is_closed()]
+        manager.page = remaining_pages[-1]
+        
+        # Get representation of the new active page
+        rep_header, rep_body = get_representation_header_and_body(manager.page, "interactive")
+        return (
+            f"Successfully closed the active tab. Active page switched to tab: '{manager.page.url}'.\n\n"
+            f"{rep_header}:\n{rep_body}"
+        )
+    except Exception as e:
+        return f"Failed to close current tab. Error: {str(e)}"
+
+
+@tool
+def go_back(mode: str = "interactive") -> str:
+    """
+    Navigates the current page back one step in history.
+    Returns confirmation, current URL, and the updated pruned accessibility tree of the page.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        page.go_back()
+        page.wait_for_timeout(1500)
+        
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
+        return (
+            f"Successfully went back in history. Current URL: '{page.url}'. Page Title: '{page.title()}'.\n\n"
+            f"{rep_header}:\n{rep_body}"
+        )
+    except Exception as e:
+        return f"Failed to go back. Error: {str(e)}"
+
+
+@tool
 def close_browser_session() -> str:
     """
     Closes the active Browser window and stops the automation session.
@@ -1258,3 +1787,100 @@ def close_browser_session() -> str:
         return f"{browser_type_name} Browser session successfully closed."
     except Exception as e:
         return f"Failed to close browser session. Error: {str(e)}"
+
+
+def log_api_call(caller_name: str, model_name: str, input_tokens: int, output_tokens: int):
+    """
+    Logs an LLM API call's token usage to the active session log file.
+    All API calls in the current browser session are logged to a single file.
+    """
+    try:
+        from pathlib import Path
+        manager = PersistentBrowserManager.get_instance()
+        if not hasattr(manager, "session_id") or not manager.session_id:
+            manager.session_id = time.strftime("%Y%m%d_%H%M%S")
+            manager.api_call_logs = []
+
+        log_entry = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "caller": caller_name,
+            "model": model_name,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens
+        }
+        manager.api_call_logs.append(log_entry)
+
+        # Write/Update the session API calls log file
+        log_dir = Path(__file__).parent.parent / "logs"
+        log_dir.mkdir(exist_ok=True)
+        session_log_file = log_dir / f"session_api_calls_{manager.session_id}.json"
+        
+        with open(session_log_file, "w", encoding="utf-8") as f:
+            json.dump(manager.api_call_logs, f, indent=4)
+            
+        print(f"[Session Token Logger] Logged API call from '{caller_name}' to {session_log_file}")
+    except Exception as e:
+        print(f"[Session Token Logger Warning] Failed to log API call: {e}")
+
+
+def save_chat_transcript(platform: str, messages: list, session_id: str):
+    """
+    Logs the total chat transcript to a text file.
+    Includes all the messages sent to the LLM (Human, AI, Tool, System),
+    the response from the model, and the tools being called with their arguments and results.
+    """
+    try:
+        import time
+        import json
+        from pathlib import Path
+        log_dir = Path(__file__).parent.parent / "logs"
+        log_dir.mkdir(exist_ok=True)
+        filename = log_dir / f"{platform}_chat_transcript_{session_id}.txt"
+        
+        # Match tool call IDs to names
+        tool_call_id_to_name = {}
+        for msg in messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if isinstance(tc, dict) and "id" in tc and "name" in tc:
+                        tool_call_id_to_name[tc["id"]] = tc["name"]
+                        
+        transcript_lines = []
+        transcript_lines.append("=" * 80)
+        transcript_lines.append(f"AGENT CHAT TRANSCRIPT - Platform: {platform.upper()}")
+        transcript_lines.append(f"Session ID: {session_id}")
+        transcript_lines.append(f"Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        transcript_lines.append("=" * 80)
+        transcript_lines.append("\n")
+        
+        for idx, msg in enumerate(messages):
+            msg_type = type(msg).__name__
+            transcript_lines.append(f"--- Message {idx + 1} ({msg_type}) ---")
+            
+            if msg_type == "HumanMessage":
+                transcript_lines.append(f"[USER/PROMPT]:\n{msg.content}\n")
+            elif msg_type == "SystemMessage":
+                transcript_lines.append(f"[SYSTEM MESSAGE]:\n{msg.content}\n")
+            elif msg_type == "AIMessage":
+                transcript_lines.append(f"[AI THOUGHTS/RESPONSE]:\n{msg.content or '(No text content)'}\n")
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    transcript_lines.append("Proposed Tool Call(s):")
+                    for tc in msg.tool_calls:
+                        if isinstance(tc, dict):
+                            transcript_lines.append(f"  - Tool: {tc.get('name')} | Arguments: {tc.get('args')} | Call ID: {tc.get('id')}")
+                    transcript_lines.append("")
+            elif msg_type == "ToolMessage":
+                tool_name = tool_call_id_to_name.get(msg.tool_call_id, "unknown_tool")
+                transcript_lines.append(f"[TOOL RESPONSE: '{tool_name}'] (Call ID: {msg.tool_call_id}):\n{msg.content}\n")
+            else:
+                transcript_lines.append(f"[UNKNOWN MESSAGE TYPE]:\n{msg.content}\n")
+                
+            transcript_lines.append("-" * 60 + "\n")
+            
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("\n".join(transcript_lines))
+        print(f"[Transcript Logger] Chat transcript saved/updated at: {filename}")
+    except Exception as e:
+        print(f"[Transcript Logger Warning] Failed to save chat transcript: {e}")
+

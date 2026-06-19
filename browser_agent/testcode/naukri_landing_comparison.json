@@ -1,0 +1,23 @@
+{
+    "interactive": {
+        "a11y_chars": 16613,
+        "a11y_tokens": 4153,
+        "dom_chars": 19786,
+        "dom_tokens": 4946,
+        "savings_pct": -19.094630387671565
+    },
+    "reading": {
+        "a11y_chars": 10441,
+        "a11y_tokens": 2610,
+        "dom_chars": 26130,
+        "dom_tokens": 6532,
+        "savings_pct": -150.26819923371647
+    },
+    "full": {
+        "a11y_chars": 8064,
+        "a11y_tokens": 2016,
+        "dom_chars": 26170,
+        "dom_tokens": 6542,
+        "savings_pct": -224.50396825396822
+    }
+}

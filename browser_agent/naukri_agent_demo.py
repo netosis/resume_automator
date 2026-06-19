@@ -5,6 +5,14 @@ import random
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
 
+# Reconfigure stdout/stderr to UTF-8 on Windows to avoid cp1252/charmap print crashes
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 def invoke_model_with_retry(model, messages, max_retries=5, initial_delay=2.0):
     """
     Invokes the model with exponential backoff retry for 429 (Rate Limit) and 503 (Service Unavailable) errors.
@@ -36,24 +44,106 @@ from browser_tools import (
     scroll_page,
     get_interactable_buttons,
     fetch_job_details,
-    naukri_job_fetch,
     click_apply_button,
-    search_naukri_via_url,
     close_browser_session,
     get_form_fields,
     select_dropdown_option,
     set_checkbox_state,
-    upload_file
+    upload_file,
+    log_api_call,
+    get_compressed_dom,
+    close_current_tab,
+    go_back,
+    save_chat_transcript,
+    fill_entire_form,
+    PersistentBrowserManager
 )
+from naukri_tools import (
+    naukri_job_fetch,
+    search_naukri_via_url,
+    manage_naukri_popup_question
+)
+
+# Global token tracker for handling force close cleanup
+_TOKEN_TRACKER = {
+    "prompt": "",
+    "model_name": "unknown",
+    "llm_token_logs": [],
+    "tool_token_logs": [],
+    "total_llm_input": 0,
+    "total_llm_output": 0,
+    "total_tool_input": 0,
+    "total_tool_output": 0,
+    "messages": []
+}
+
+
+def save_force_close_logs(platform: str):
+    print("\n" + "="*50)
+    print("SESSION TOKEN USAGE SUMMARY (FORCE CLOSED)")
+    print("="*50)
+    print(f"LLM Calls:")
+    print(f"  Total Input Tokens:  {_TOKEN_TRACKER['total_llm_input']}")
+    print(f"  Total Output Tokens: {_TOKEN_TRACKER['total_llm_output']}")
+    print(f"  Total LLM Tokens:    {_TOKEN_TRACKER['total_llm_input'] + _TOKEN_TRACKER['total_llm_output']}")
+    print(f"\nTool Calls:")
+    print(f"  Total Input Tokens:  {_TOKEN_TRACKER['total_tool_input']}")
+    print(f"  Total Output Tokens: {_TOKEN_TRACKER['total_tool_output']}")
+    print(f"  Total Tool Tokens:   {_TOKEN_TRACKER['total_tool_input'] + _TOKEN_TRACKER['total_tool_output']}")
+    print("\nDetailed Tool Token Usage:")
+    for log in _TOKEN_TRACKER['tool_token_logs']:
+        print(f"  - Step {log['step']}: Tool '{log['tool_name']}' | Input: {log['input_tokens']} | Output: {log['output_tokens']} | Status: {log['status']}")
+    print("="*50 + "\n")
+
+    session_summary = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "force_closed",
+        "task_prompt": _TOKEN_TRACKER["prompt"],
+        "llm_totals": {
+            "input": _TOKEN_TRACKER["total_llm_input"],
+            "output": _TOKEN_TRACKER["total_llm_output"],
+            "total": _TOKEN_TRACKER["total_llm_input"] + _TOKEN_TRACKER["total_llm_output"]
+        },
+        "tool_totals": {
+            "input": _TOKEN_TRACKER["total_tool_input"],
+            "output": _TOKEN_TRACKER["total_tool_output"],
+            "total": _TOKEN_TRACKER["total_tool_input"] + _TOKEN_TRACKER["total_tool_output"]
+        },
+        "llm_steps": _TOKEN_TRACKER["llm_token_logs"],
+        "tool_calls": _TOKEN_TRACKER["tool_token_logs"]
+    }
+
+    try:
+        from pathlib import Path
+        import json
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        filename = log_dir / f"{platform}_force_closed_token_usage_{time.strftime('%Y%m%d_%H%M%S')}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(session_summary, f, indent=4)
+        print(f"[Token Logger] Force close token usage logged to: {filename}")
+    except Exception as e:
+        print(f"[Token Logger Warning] Failed to save force close token log: {e}")
+
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        session_id = getattr(manager, "session_id", time.strftime("%Y%m%d_%H%M%S"))
+        save_chat_transcript(platform, _TOKEN_TRACKER["messages"], session_id)
+    except Exception as e:
+        print(f"[Transcript Force Close Warning] Failed to save final chat transcript: {e}")
 
 # Load environment variables (for GEMINI_API_KEY)
 load_dotenv()
+
+# Force Browser Normal/Persistent mode (not incognito) so user session cookies are reused
+os.environ["BROWSER_INCOGNITO"] = "false"
 
 def run_browser_agent(prompt: str):
     """
     Runs a simple agent loop using the Gemini model and the browser tools.
     """
-    # Determine which LLM provider to use (default to deepseek if DEEPSEEK_API_KEY is present)
+    _TOKEN_TRACKER["prompt"] = prompt
+    # Determine which LLM provider to use
     provider = os.getenv("LLM_PROVIDER")
     if not provider:
         provider = "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "google"
@@ -77,6 +167,19 @@ def run_browser_agent(prompt: str):
             api_base=api_base,
             temperature=0.0
         )
+    elif provider == "local":
+        api_base = os.getenv("LOCAL_API_BASE", "http://localhost:11434/v1")
+        model_name = os.getenv("LOCAL_MODEL", "qwen2.5")
+        api_key = os.getenv("LOCAL_API_KEY", "local")
+        
+        print(f"Initializing ChatOpenAI local model='{model_name}' at base='{api_base}'...")
+        from langchain_openai import ChatOpenAI
+        model = ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=api_base,
+            temperature=0.0
+        )
     else:
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
@@ -93,6 +196,7 @@ def run_browser_agent(prompt: str):
             api_key=api_key,
             temperature=0.0
         )
+    _TOKEN_TRACKER["model_name"] = model_name
 
     # Define tool library
     tools = [
@@ -110,13 +214,18 @@ def run_browser_agent(prompt: str):
         get_form_fields,
         select_dropdown_option,
         set_checkbox_state,
-        upload_file
+        upload_file,
+        get_compressed_dom,
+        close_current_tab,
+        go_back,
+        fill_entire_form,
+        manage_naukri_popup_question
     ]
 
     # Bind tools to the model
     model_with_tools = model.bind_tools(tools)
 
-    print("\n--- Starting Agent Execution ---")
+    print("\n--- Starting Naukri Browser Agent Execution ---")
     print(f"Task Prompt: {prompt}\n")
 
     # Token tracking variables
@@ -132,17 +241,30 @@ def run_browser_agent(prompt: str):
         HumanMessage(content=(
             f"You are a helpful browser automation agent. Your task is: {prompt}. "
             "Use the browser tools provided to execute the request. "
-            "You have two tools for fetching job details: "
+            "You have tools for fetching job details from search result pages: "
             "1. 'fetch_job_details': General page text extraction (truncated to 3000 characters). "
-            "2. 'naukri_job_fetch': Specialized tool for extracting and cleaning job listings from '.srp-jobtuple-wrapper' cards on naukri.com search result pages. "
+            "2. 'naukri_job_fetch': Specialized tool for extracting and cleaning job listings from '.srp-jobtuple-wrapper' cards on naukri.com. "
+            "You also have a direct URL job search tool: "
+            "- 'search_naukri_via_url': Navigate directly to job search on naukri.com. "
+            "You have a batch form filling tool: "
+            "- 'fill_entire_form': Clicks, types, and selects all fields on a form page at once using a list of field specifications. ALWAYS use this tool to fill form fields, checkboxes, dropdowns, and file uploads at once rather than filling them one by one. Use individual input/select tools only as a fallback. "
             "You also have a specialized tool for clicking apply buttons: "
             "- 'click_apply_button': Automatically searches the page for visible elements matching 'Apply', 'Apply on Company Site', etc. and clicks them, auto-switching tabs if a new page is opened. "
+            "You also have specialized tools for browser navigation and tab management: "
+            "- 'close_current_tab': Closes the currently active browser tab and switches to the last remaining open tab. Use this when a new tab was opened after clicking Apply or a job link and you are done with it. "
+            "- 'go_back': Navigates the current browser tab back one step in browser history. "
+            "You also have a tool to manage recruiter questions popups on naukri.com: "
+            "- 'manage_naukri_popup_question': Detects and answers recruiter chatbot questions that appear after clicking 'Apply' on Naukri. Call this first with no arguments to get the question, then call it with the 'answer' string parameter to submit the response. Repeat until all recruiter questions are answered and the popup closes. "
             "After performing your operations, analyze the retrieved information and present a final response. "
             "IMPORTANT: Do not close the browser session. Keep the browser open."
         ))
     ]
 
-    max_steps = 10
+    _TOKEN_TRACKER["messages"] = messages
+    manager = PersistentBrowserManager.get_instance()
+    session_id = getattr(manager, "session_id", time.strftime("%Y%m%d_%H%M%S"))
+
+    max_steps = 35
     for step in range(max_steps):
         print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
         try:
@@ -151,50 +273,87 @@ def run_browser_agent(prompt: str):
             print(f"\n[Agent Error]: API call failed after retries. Error: {e}")
             break
         messages.append(response)
+        save_chat_transcript("naukri", messages, session_id)
 
-        # Log LLM token usage if available in usage_metadata
+        # Log LLM token usage if available
         llm_in = 0
         llm_out = 0
         if hasattr(response, 'usage_metadata') and response.usage_metadata:
             llm_in = response.usage_metadata.get('input_tokens', 0)
             llm_out = response.usage_metadata.get('output_tokens', 0)
-            total_llm_input += llm_in
-            total_llm_output += llm_out
+        elif hasattr(response, 'response_metadata') and response.response_metadata:
+            token_usage = response.response_metadata.get('token_usage', {})
+            if isinstance(token_usage, dict):
+                llm_in = token_usage.get('prompt_tokens', 0) or token_usage.get('input_tokens', 0)
+                llm_out = token_usage.get('completion_tokens', 0) or token_usage.get('output_tokens', 0)
         
-        llm_token_logs.append({
+        # Fallback estimation using get_num_tokens
+        if (llm_in == 0 or llm_out == 0) and hasattr(model, 'get_num_tokens'):
+            try:
+                llm_in = model.get_num_tokens(str(messages[:-1]))
+                llm_out = model.get_num_tokens(response.content or "")
+            except Exception:
+                pass
+                
+        total_llm_input += llm_in
+        total_llm_output += llm_out
+        
+        # Update global tracker
+        _TOKEN_TRACKER["total_llm_input"] = total_llm_input
+        _TOKEN_TRACKER["total_llm_output"] = total_llm_output
+        _TOKEN_TRACKER["llm_token_logs"].append({
             "step": step + 1,
             "input_tokens": llm_in,
             "output_tokens": llm_out,
             "total_tokens": llm_in + llm_out
         })
+        
+        # Print LLM API call tokens
+        print(f"[LLM API Call]: Sent: {llm_in} tokens | Returned: {llm_out} tokens")
 
-        # Print thoughts if there is any content response
         if response.content:
             print(f"\n[Agent Thoughts]:\n{response.content}\n")
 
-        # If there are no tool calls, agent has finished
         if not response.tool_calls:
+            # Log final response
+            try:
+                log_api_call(
+                    caller_name="Final Response",
+                    model_name=model_name,
+                    input_tokens=llm_in,
+                    output_tokens=llm_out
+                )
+            except Exception as e:
+                print(f"[Agent Warning] Failed to log final API call: {e}")
             print("[Agent Execution Complete]")
             break
 
-        # Process each tool call suggested by the model
+        # Process tool calls
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             tool_id = tool_call["id"]
 
-            # Count input tokens
             input_tokens = model.get_num_tokens(str(tool_args))
             print(f"[Agent Tool Call]: {tool_name} with args {tool_args} | Input Size: {input_tokens} tokens")
+            print(f"[API Call Tokens for Tool '{tool_name}']: Sent to API: {llm_in} | Returned by Model: {llm_out}")
 
-            # Find and invoke the matching tool
+            # Log to the unified session log file specifically for this tool call
+            try:
+                log_api_call(
+                    caller_name=f"API Call for Tool: {tool_name}",
+                    model_name=model_name,
+                    input_tokens=llm_in,
+                    output_tokens=llm_out
+                )
+            except Exception as e:
+                print(f"[Agent Warning] Failed to log tool API call: {e}")
+
             matching_tool = next((t for t in tools if t.name == tool_name), None)
             if matching_tool:
                 try:
                     result = matching_tool.invoke(tool_args)
                     result_str = str(result)
-                    
-                    # Count output tokens
                     output_tokens = model.get_num_tokens(result_str)
                     print(f"[Tool Response]: {result}")
                     print(f"[Token Usage]: Tool '{tool_name}' consumed: {input_tokens} (input) + {output_tokens} (output) = {input_tokens + output_tokens} total tokens\n")
@@ -203,14 +362,20 @@ def run_browser_agent(prompt: str):
                         "step": step + 1,
                         "tool_name": tool_name,
                         "args": tool_args,
-                        "input_tokens": input_tokens,
+                        "input_tokens": llm_in,
                         "output_tokens": output_tokens,
                         "status": "success"
                     })
-                    total_tool_input += input_tokens
+                    total_tool_input += llm_in
                     total_tool_output += output_tokens
                     
+                    # Update global tracker
+                    _TOKEN_TRACKER["total_tool_input"] = total_tool_input
+                    _TOKEN_TRACKER["total_tool_output"] = total_tool_output
+                    _TOKEN_TRACKER["tool_token_logs"] = tool_token_logs
+                    
                     messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                    save_chat_transcript("naukri", messages, session_id)
                 except Exception as e:
                     error_msg = f"Error running tool '{tool_name}': {str(e)}"
                     error_tokens = model.get_num_tokens(error_msg)
@@ -221,15 +386,21 @@ def run_browser_agent(prompt: str):
                         "step": step + 1,
                         "tool_name": tool_name,
                         "args": tool_args,
-                        "input_tokens": input_tokens,
+                        "input_tokens": llm_in,
                         "output_tokens": error_tokens,
                         "status": "error",
                         "error": str(e)
                     })
-                    total_tool_input += input_tokens
+                    total_tool_input += llm_in
                     total_tool_output += error_tokens
                     
+                    # Update global tracker
+                    _TOKEN_TRACKER["total_tool_input"] = total_tool_input
+                    _TOKEN_TRACKER["total_tool_output"] = total_tool_output
+                    _TOKEN_TRACKER["tool_token_logs"] = tool_token_logs
+                    
                     messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
+                    save_chat_transcript("naukri", messages, session_id)
             else:
                 error_msg = f"Tool '{tool_name}' is not registered."
                 error_tokens = model.get_num_tokens(error_msg)
@@ -240,14 +411,20 @@ def run_browser_agent(prompt: str):
                     "step": step + 1,
                     "tool_name": tool_name,
                     "args": tool_args,
-                    "input_tokens": input_tokens,
+                    "input_tokens": llm_in,
                     "output_tokens": error_tokens,
                     "status": "not_registered"
                 })
-                total_tool_input += input_tokens
+                total_tool_input += llm_in
                 total_tool_output += error_tokens
                 
+                # Update global tracker
+                _TOKEN_TRACKER["total_tool_input"] = total_tool_input
+                _TOKEN_TRACKER["total_tool_output"] = total_tool_output
+                _TOKEN_TRACKER["tool_token_logs"] = tool_token_logs
+                
                 messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
+                save_chat_transcript("naukri", messages, session_id)
     else:
         print("[Agent Warning]: Reached maximum steps without formal completion.")
 
@@ -268,7 +445,7 @@ def run_browser_agent(prompt: str):
         print(f"  - Step {log['step']}: Tool '{log['tool_name']}' | Input: {log['input_tokens']} | Output: {log['output_tokens']} | Status: {log['status']}")
     print("="*50 + "\n")
 
-    # Save to file
+    # Save summary
     session_summary = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "task_prompt": prompt,
@@ -291,7 +468,7 @@ def run_browser_agent(prompt: str):
         import json
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        filename = log_dir / f"session_token_usage_{time.strftime('%Y%m%d_%H%M%S')}.json"
+        filename = log_dir / f"naukri_token_usage_{time.strftime('%Y%m%d_%H%M%S')}.json"
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(session_summary, f, indent=4)
         print(f"[Token Logger] Token usage logged to: {filename}")
@@ -301,11 +478,14 @@ def run_browser_agent(prompt: str):
 if __name__ == "__main__":
     default_prompt = (
         "Search for 'AI Engineer' jobs on naukri.com using the direct URL modification tool. "
-        "Open the first job listing. On the job details page, find and click the 'Apply' button "
-        "using the specialized tool, then stop execution and keep the browser open."
+        "Find and apply to 5 different jobs. For each job, open the job listing, "
+        "click the 'Apply' button. If any chatbot / recruiter questions popups show up, "
+        "use 'manage_naukri_popup_question' to detect and answer them iteratively until the modal closes. "
+        "If a new tab opens, handle the application, close the tab, and return to the main tab. "
+        "Repeat until you have successfully applied to 5 unique jobs. Keep the browser open when complete."
     )
     
-    print("Welcome to the Browser Automation LLM Agent Demo!")
+    print("Welcome to the Naukri Browser Automation LLM Agent Demo!")
     print("Press Enter to use the default prompt, or enter a custom prompt below.")
     print(f"Default prompt: \"{default_prompt}\"")
     
@@ -316,4 +496,8 @@ if __name__ == "__main__":
         sys.exit(0)
 
     prompt = user_prompt if user_prompt else default_prompt
-    run_browser_agent(prompt)
+    try:
+        run_browser_agent(prompt)
+    except KeyboardInterrupt:
+        save_force_close_logs("naukri")
+        sys.exit(0)

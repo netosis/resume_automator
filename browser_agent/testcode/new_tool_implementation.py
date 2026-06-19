@@ -1546,6 +1546,21 @@ async def example_usage():
                 logger.info("Initialized DeepSeek model for token counting")
             except Exception as e:
                 logger.warning(f"Could not initialize DeepSeek model for token counting: {e}")
+    elif provider == "local":
+        api_base = os.getenv("LOCAL_API_BASE", "http://localhost:11434/v1")
+        model_name = os.getenv("LOCAL_MODEL", "qwen2.5")
+        api_key = os.getenv("LOCAL_API_KEY", "local")
+        try:
+            from langchain_openai import ChatOpenAI
+            model = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                base_url=api_base,
+                temperature=0.0
+            )
+            logger.info("Initialized Local model for token counting")
+        except Exception as e:
+            logger.warning(f"Could not initialize Local model for token counting: {e}")
     else:
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if api_key:

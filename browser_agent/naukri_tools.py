@@ -1,0 +1,231 @@
+import os
+import re
+import json
+import time
+from typing import Optional, Dict, List, Any, Union
+from langchain_core.tools import tool
+from browser_tools import (
+    PersistentBrowserManager,
+    get_representation_header_and_body,
+    clean_page_text
+)
+
+@tool
+def naukri_job_fetch() -> str:
+    """
+    Retrieves job details from the current page by locating and cleaning elements with class 'srp-jobtuple-wrapper'.
+    Only use this on naukri.com search result pages.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        # Get page URL and title
+        url = page.url
+        title = page.title()
+        
+        # Locate all job cards matching `.srp-jobtuple-wrapper`
+        job_cards_locator = page.locator(".srp-jobtuple-wrapper")
+        card_count = job_cards_locator.count()
+        
+        job_cards_details = []
+        for i in range(card_count):
+            card = job_cards_locator.nth(i)
+            # Retrieve HTML, strip HTML tags, and clean whitespace
+            card_html = card.inner_html()
+            # Clean HTML by removing tags and normal whitespace cleaning
+            clean_text = re.sub(r'<[^>]*>', ' ', card_html)
+            clean_text = clean_page_text(clean_text)
+            job_cards_details.append(f"Job Listing {i + 1}:\n{clean_text}")
+            
+        method_b_content = "\n\n".join(job_cards_details)
+        if not method_b_content:
+            method_b_content = "No elements with class 'srp-jobtuple-wrapper' found on this page."
+            
+        return (
+            f"Job Page URL: {url}\n"
+            f"Page Title: {title}\n\n"
+            f"Job Details from job cards:\n{method_b_content}"
+        )
+    except Exception as e:
+        return f"Failed to fetch naukri job details. Error: {str(e)}"
+
+@tool
+def search_naukri_via_url(job_title: str) -> str:
+    """
+    Searches for jobs on naukri.com by directly modifying the URL pattern (e.g. 'naukri.com/ai-engineer-jobs')
+    instead of using search boxes and buttons.
+    When calling this tool, the LLM should ONLY provide the job role name (e.g., 'AI Engineer') for the 'job_title' parameter.
+    Returns the confirmation of navigation and the updated accessibility tree if it has changed, otherwise False.
+    """
+    mode = "interactive"
+    try:
+        # Standardize job title: convert to lowercase, strip, replace spaces/special chars with hyphens
+        sanitized_title = job_title.lower().strip()
+        sanitized_title = re.sub(r'[^a-z0-9]+', '-', sanitized_title)
+        sanitized_title = sanitized_title.strip('-')
+        
+        url = f"https://www.naukri.com/{sanitized_title}-jobs"
+        
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        print(f"[Tool: search_naukri_via_url] Navigating to direct search URL: {url}")
+        page.goto(url, wait_until="load")
+        
+        # Wait a small moment for dynamic loads
+        page.wait_for_timeout(1500)
+        
+        title = page.title()
+        current_url = page.url
+        
+        rep_header, rep_body = get_representation_header_and_body(page, mode)
+        return (
+            f"Successfully navigated to direct search URL: {current_url}. Page Title: '{title}'.\n\n"
+            f"{rep_header}:\n{rep_body}"
+        )
+    except Exception as e:
+        return f"Failed to search naukri via URL. Error: {str(e)}"
+
+@tool
+def manage_naukri_popup_question(answer: Optional[str] = None) -> str:
+    """
+    Detects and answers recruiter popup chatbot questions on naukri.com after clicking Apply.
+    If 'answer' is not provided, it scans the page to check if a popup question is visible and returns the question text.
+    If 'answer' is provided, it types it into the popup's input field and clicks the Save/Submit button, returning the next state.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        # 1. Detect if popup question element and input are visible
+        # Evaluate layout elements using JS in the page
+        popup_info = page.evaluate(r'''
+            () => {
+                const inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']");
+                if (!inputEl) {
+                    return { detected: false };
+                }
+                
+                const parentContainer = inputEl.closest("div[class*='modal'], div[class*='container'], div[class*='dialog'], body");
+                let questionText = "";
+                
+                if (parentContainer) {
+                    const elements = Array.from(parentContainer.querySelectorAll("div, p, span, h1, h2, h3, h4, li"));
+                    const questionCandidates = elements.filter(el => {
+                        const text = el.innerText ? el.innerText.trim() : "";
+                        if (text.length > 5 && text.length < 250 && text.includes("?") && !el.querySelector("input, textarea, button")) {
+                            return true;
+                        }
+                        return false;
+                    });
+                    
+                    if (questionCandidates.length > 0) {
+                        const visibleQuestions = questionCandidates.filter(el => {
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+                        });
+                        if (visibleQuestions.length > 0) {
+                            questionText = visibleQuestions[visibleQuestions.length - 1].innerText.trim();
+                        }
+                    }
+                }
+                
+                if (!questionText) {
+                    const siblings = Array.from(document.querySelectorAll("div, p, span"));
+                    const textBubbles = siblings.filter(el => {
+                        const text = el.innerText ? el.innerText.trim() : "";
+                        return text.length > 5 && text.length < 200 && !el.querySelector("input, textarea, button") && 
+                               (el.className.includes("msg") || el.className.includes("bubble") || el.className.includes("text") || el.className.includes("question"));
+                    });
+                    if (textBubbles.length > 0) {
+                        questionText = textBubbles[textBubbles.length - 1].innerText.trim();
+                    } else {
+                        questionText = "Recruiter question popup detected (unable to parse exact question text).";
+                    }
+                }
+                
+                return {
+                    detected: true,
+                    question: questionText,
+                    placeholder: inputEl.placeholder || ""
+                };
+            }
+        ''')
+        
+        if not popup_info.get("detected"):
+            return "No active recruiter question popup detected on the page."
+            
+        if not answer:
+            return (
+                f"Recruiter popup question detected!\n"
+                f"Question: \"{popup_info['question']}\"\n"
+                f"Input Placeholder: \"{popup_info['placeholder']}\"\n"
+                f"Please invoke this tool again providing the 'answer' parameter to submit your response."
+            )
+            
+        # Answer is provided, fill it
+        input_locator = page.locator("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']").first
+        input_locator.fill(answer)
+        page.wait_for_timeout(500)
+        
+        # Click the Save/Submit button
+        save_button = page.locator("button:has-text('Save'), button:has-text('Submit'), button:has-text('Next'), button:has-text('Send'), [class*='save'] button, [class*='Save'] button").first
+        if not save_button.is_visible():
+            save_button = page.locator("button:has-text('save'), button:has-text('submit'), button:has-text('next'), button:has-text('send')").first
+            
+        if not save_button.is_visible():
+            # Broad search for any button inside the bottom footer/dialog containing text Save or Submit
+            save_button = page.locator("button").filter(has_text=re.compile("^(save|submit|next|send)$", re.I)).first
+            
+        if not save_button.is_visible():
+            return f"Error: Located the input field and filled the answer, but could not locate the 'Save' or 'Submit' button to submit it."
+            
+        save_button.click()
+        # Wait for potential new question or modal close
+        page.wait_for_timeout(2000)
+        
+        # Check new state
+        new_popup_info = page.evaluate(r'''
+            () => {
+                const inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']");
+                if (!inputEl) {
+                    return null;
+                }
+                const parentContainer = inputEl.closest("div[class*='modal'], div[class*='container'], div[class*='dialog'], body");
+                let questionText = "";
+                
+                if (parentContainer) {
+                    const elements = Array.from(parentContainer.querySelectorAll("div, p, span, h1, h2, h3, h4, li"));
+                    const questionCandidates = elements.filter(el => {
+                        const text = el.innerText ? el.innerText.trim() : "";
+                        if (text.length > 5 && text.length < 250 && text.includes("?") && !el.querySelector("input, textarea, button")) {
+                            return true;
+                        }
+                        return false;
+                    });
+                    
+                    if (questionCandidates.length > 0) {
+                        const visibleQuestions = questionCandidates.filter(el => {
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+                        });
+                        if (visibleQuestions.length > 0) {
+                            questionText = visibleQuestions[visibleQuestions.length - 1].innerText.trim();
+                        }
+                    }
+                }
+                return { question: questionText || "Next question bubble" };
+            }
+        ''')
+        
+        if new_popup_info is None:
+            return "Successfully submitted the answer. The recruiter popup question modal has closed."
+        else:
+            return (
+                f"Successfully submitted the answer.\n"
+                f"The next recruiter popup question has loaded: \"{new_popup_info['question']}\""
+            )
+            
+    except Exception as e:
+        return f"Failed to detect or answer the popup question. Error: {str(e)}"

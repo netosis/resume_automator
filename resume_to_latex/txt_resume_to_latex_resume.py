@@ -14,6 +14,13 @@ except ModuleNotFoundError:
 
 LOGGER = logging.getLogger(__name__)
 
+# Try to import log_api_call from browser_agent
+try:
+    sys.path.append(str(Path(__file__).parent.parent.resolve() / "browser_agent"))
+    from browser_tools import log_api_call
+except Exception:
+    log_api_call = None
+
 
 def load_env_file(env_path: str = ".env") -> None:
     path = Path(env_path).expanduser().resolve()
@@ -39,7 +46,9 @@ def resolve_api_key(api_key: str | None = None, provider: str = "google") -> str
     # Load optional .env values before reading process environment variables.
     load_env_file()
 
-    if provider == "deepseek":
+    if provider == "local":
+        return os.getenv("LOCAL_API_KEY") or "local"
+    elif provider == "deepseek":
         env_api_key = os.getenv("DEEPSEEK_API_KEY")
         if env_api_key:
             return env_api_key
@@ -139,6 +148,18 @@ def txt_to_resume_latex(
             api_base=api_base,
             temperature=0.0
         )
+    elif provider == "local":
+        model_name = model if ("gemini" not in model.lower() and "deepseek" not in model.lower()) else (os.getenv("LOCAL_MODEL") or "qwen2.5")
+        resolved_api_key = resolve_api_key(api_key, provider="local")
+        api_base = os.getenv("LOCAL_API_BASE") or "http://localhost:11434/v1"
+        
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=model_name,
+            api_key=resolved_api_key,
+            base_url=api_base,
+            temperature=0.0
+        )
     else:
         model_name = model
         resolved_api_key = resolve_api_key(api_key, provider="google")
@@ -170,7 +191,7 @@ def txt_to_resume_latex(
                 estimated_tokens, len(base_template), len(resume_text),
             )
 
-        LOGGER.info(f"Invoking {model} to convert txt resume to Base LaTeX...")
+        LOGGER.info(f"Invoking {model_name} to convert txt resume to Base LaTeX...")
         response = llm.invoke([
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=prompt),
@@ -181,6 +202,18 @@ def txt_to_resume_latex(
             LOGGER.info("Token usage - input tokens: %s, output tokens: %s", input_tokens, output_tokens)
         else:
             LOGGER.info("Token usage metadata was not returned by the model response.")
+
+        # Log to unified session log
+        if log_api_call:
+            try:
+                log_api_call(
+                    caller_name="txt_to_resume_latex",
+                    model_name=model_name,
+                    input_tokens=input_tokens or 0,
+                    output_tokens=output_tokens or 0
+                )
+            except Exception as e:
+                LOGGER.warning(f"Failed to log API call to session: {e}")
 
         latex_code = strip_code_fences(str(response.content))
 

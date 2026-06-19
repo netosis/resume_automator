@@ -34,6 +34,7 @@ def run_workflow(
         os.environ["LLM_PROVIDER"] = provider
     if api_base:
         os.environ["DEEPSEEK_API_BASE"] = api_base
+        os.environ["LOCAL_API_BASE"] = api_base
 
     kwargs = {}
     if model:
@@ -119,7 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume-pdf", required=True, help="Path to the user's resume PDF")
     parser.add_argument("--model", default=None, help="Model name")
     parser.add_argument("--api-key", default=None, help="API key")
-    parser.add_argument("--provider", default=None, help="LLM provider: 'google' or 'deepseek'")
+    parser.add_argument("--provider", default=None, help="LLM provider: 'google', 'deepseek', or 'local'")
     parser.add_argument("--api-base", default=None, help="Custom API base URL")
     
     args = parser.parse_args()

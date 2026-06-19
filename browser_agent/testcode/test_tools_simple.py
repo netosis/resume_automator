@@ -10,10 +10,10 @@ from browser_tools import (
     get_page_text,
     get_interactable_buttons,
     fetch_job_details,
-    naukri_job_fetch,
     PersistentBrowserManager,
     close_browser_session
 )
+from naukri_tools import naukri_job_fetch
 
 def run_test():
     browser_type = os.getenv("BROWSER_TYPE", "brave").lower()
