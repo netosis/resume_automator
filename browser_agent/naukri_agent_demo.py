@@ -2,8 +2,10 @@ import os
 import sys
 import time
 import random
+import re
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from js_templates import NAUKRI_JOB_STATUS_CHECK_JS
 
 # Reconfigure stdout/stderr to UTF-8 on Windows to avoid cp1252/charmap print crashes
 if sys.platform.startswith("win"):
@@ -138,6 +140,21 @@ load_dotenv()
 # Force Browser Normal/Persistent mode (not incognito) so user session cookies are reused
 os.environ["BROWSER_INCOGNITO"] = "false"
 
+def extract_job_role(prompt: str) -> str:
+    """
+    Extracts the job role from the user prompt. Looks for quoted strings
+    or keywords like 'for ... jobs'.
+    """
+    match = re.search(r"['\"]([^'\"]+)['\"]", prompt)
+    if match:
+        return match.group(1)
+    
+    match = re.search(r"for\s+(.+?)\s+jobs", prompt, re.IGNORECASE)
+    if match:
+        return match.group(1)
+        
+    return "AI Engineer"
+
 def run_browser_agent(prompt: str):
     """
     Runs a simple agent loop using the Gemini model and the browser tools.
@@ -237,26 +254,168 @@ def run_browser_agent(prompt: str):
     total_tool_input = 0
     total_tool_output = 0
 
+    # 1. Programmatic job openings preparation
+    job_role = extract_job_role(prompt)
+    print(f"[Naukri Prep] Extracted job role: '{job_role}'")
+    
+    sanitized_title = job_role.lower().strip()
+    sanitized_title = re.sub(r'[^a-z0-9]+', '-', sanitized_title)
+    sanitized_title = sanitized_title.strip('-')
+    search_url = f"https://www.naukri.com/{sanitized_title}-jobs"
+    
+    manager = PersistentBrowserManager.get_instance()
+    page = manager.get_page()
+    
+    print(f"[Naukri Prep] Navigating to: {search_url}")
+    page.goto(search_url, wait_until="load")
+    page.wait_for_timeout(random.randint(2750, 3250))
+    
+    # Locate all job cards matching `.srp-jobtuple-wrapper`
+    job_cards_locator = page.locator(".srp-jobtuple-wrapper")
+    card_count = job_cards_locator.count()
+    
+    if card_count == 0:
+        print("[Naukri Prep] No job cards found. Waiting another 3 seconds for search results...")
+        page.wait_for_timeout(random.randint(2750, 3250))
+        job_cards_locator = page.locator(".srp-jobtuple-wrapper")
+        card_count = job_cards_locator.count()
+        
+    print(f"[Naukri Prep] Found {card_count} job postings on the search page.")
+    
+    search_page = page
+    valid_tabs = []
+    
+    # File to store skipped third-party job URLs
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    outputs_dir = os.path.join(script_dir, "outputs")
+    os.makedirs(outputs_dir, exist_ok=True)
+    skipped_file_path = os.path.join(outputs_dir, "skipped_third_party_jobs.txt")
+    
+    # Loop through cards and click titles to open in new tabs
+    for i in range(card_count):
+        # Locate the card again (dynamic access)
+        card = page.locator(".srp-jobtuple-wrapper").nth(i)
+        
+        # Try multiple selectors for the job title link inside the card
+        title_link = card.locator("a.title")
+        if not title_link.count():
+            title_link = card.locator("a[href*='job-listings']")
+        if not title_link.count():
+            title_link = card.locator("a").first
+            
+        if not title_link.count():
+            print(f"[Naukri Prep] Skipping listing {i+1} (no title link found)")
+            continue
+            
+        try:
+            # Scroll into view
+            title_link.scroll_into_view_if_needed()
+            link_text = title_link.inner_text().strip()
+            
+            # Randomized delay before opening: 1 to 2 seconds
+            open_delay = random.uniform(1.0, 2.0)
+            print(f"[Naukri Prep] Waiting {open_delay:.2f}s before opening job {i+1}: '{link_text}'")
+            page.wait_for_timeout(int(open_delay * 1000))
+            
+            # Click using slow cursor movements
+            box = title_link.bounding_box()
+            if box:
+                x = box['x'] + box['width'] / 2
+                y = box['y'] + box['height'] / 2
+                
+                # Move cursor slowly to coordinates
+                steps = random.randint(15, 25)
+                print(f"[Naukri Prep] Moving mouse slowly to ({x:.1f}, {y:.1f}) in {steps} steps...")
+                page.mouse.move(x, y, steps=steps)
+                page.wait_for_timeout(random.randint(50, 550)) # Short human-like pause before click
+                
+                # Click using mouse API
+                with page.context.expect_page(timeout=15000) as new_page_info:
+                    page.mouse.click(x, y)
+                new_page = new_page_info.value
+            else:
+                # Fallback to standard locator click
+                with page.context.expect_page(timeout=15000) as new_page_info:
+                    title_link.click()
+                new_page = new_page_info.value
+            
+            # Wait for new page to load
+            new_page.wait_for_load_state("load")
+            new_url = new_page.url
+            print(f"[Naukri Prep] Opened job {i+1} in new tab: {new_url}")
+            
+            # Wait for content to settle
+            new_page.wait_for_timeout(random.randint(1750, 2250))
+            
+            # Run JS evaluation to check for Applied or Third-Party Apply
+            status_check = new_page.evaluate(NAUKRI_JOB_STATUS_CHECK_JS)
+            
+            is_applied = status_check.get("isApplied", False)
+            is_third_party = status_check.get("isThirdParty", False)
+            third_party_btn = status_check.get("buttonText", "")
+            
+            if is_applied:
+                print(f"[Naukri Prep] Job {i+1} is ALREADY APPLIED. Skipping.")
+                close_delay = random.uniform(5.0, 7.0)
+                print(f"[Naukri Prep] Waiting {close_delay:.2f}s before closing tab...")
+                new_page.wait_for_timeout(int(close_delay * 1000))
+                new_page.close()
+            elif is_third_party:
+                print(f"[Naukri Prep] Job {i+1} is a THIRD-PARTY post (Button: '{third_party_btn}'). Logging and skipping.")
+                with open(skipped_file_path, "a", encoding="utf-8") as sf:
+                    sf.write(f"Job Listing {i+1}: {link_text} | URL: {new_url} | Reason: Third-party apply ({third_party_btn})\n")
+                close_delay = random.uniform(5.0, 7.0)
+                print(f"[Naukri Prep] Waiting {close_delay:.2f}s before closing tab...")
+                new_page.wait_for_timeout(int(close_delay * 1000))
+                new_page.close()
+            else:
+                print(f"[Naukri Prep] Job {i+1} is direct & unapplied. Keeping open.")
+                valid_tabs.append(new_page)
+                
+            # Switch back to search page to open the next one
+            search_page.bring_to_front()
+            manager.page = search_page
+            
+        except Exception as e:
+            print(f"[Naukri Prep] Error processing job listing {i+1}: {e}")
+            try:
+                search_page.bring_to_front()
+                manager.page = search_page
+            except Exception:
+                pass
+
+    # Close the search page tab
+    print("[Naukri Prep] Closing the search page tab.")
+    search_page.close()
+
+    if not valid_tabs:
+        print("\n" + "="*50)
+        print("NAUKRI PREP SUMMARY: NO ACTIONABLE JOBS FOUND")
+        print("="*50)
+        print("All job listings on the first page were either already applied to or redirect to third-party sites.")
+        print(f"Any third-party job URLs have been logged to: {skipped_file_path}")
+        print("="*50 + "\n")
+        return
+
+    # Set active page to the last valid tab so stack processing starts there
+    manager.page = valid_tabs[-1]
+    manager.page.bring_to_front()
+    print(f"[Naukri Prep] Preparing to start LLM Agent. Active tab set to job description: {manager.page.url}")
+
     messages = [
         HumanMessage(content=(
-            f"You are a helpful browser automation agent. Your task is: {prompt}. "
-            "Use the browser tools provided to execute the request. "
-            "You have tools for fetching job details from search result pages: "
-            "1. 'fetch_job_details': General page text extraction (truncated to 3000 characters). "
-            "2. 'naukri_job_fetch': Specialized tool for extracting and cleaning job listings from '.srp-jobtuple-wrapper' cards on naukri.com. "
-            "You also have a direct URL job search tool: "
-            "- 'search_naukri_via_url': Navigate directly to job search on naukri.com. "
-            "You have a batch form filling tool: "
-            "- 'fill_entire_form': Clicks, types, and selects all fields on a form page at once using a list of field specifications. ALWAYS use this tool to fill form fields, checkboxes, dropdowns, and file uploads at once rather than filling them one by one. Use individual input/select tools only as a fallback. "
-            "You also have a specialized tool for clicking apply buttons: "
-            "- 'click_apply_button': Automatically searches the page for visible elements matching 'Apply', 'Apply on Company Site', etc. and clicks them, auto-switching tabs if a new page is opened. "
-            "You also have specialized tools for browser navigation and tab management: "
-            "- 'close_current_tab': Closes the currently active browser tab and switches to the last remaining open tab. Use this when a new tab was opened after clicking Apply or a job link and you are done with it. "
-            "- 'go_back': Navigates the current browser tab back one step in browser history. "
-            "You also have a tool to manage recruiter questions popups on naukri.com: "
-            "- 'manage_naukri_popup_question': Detects and answers recruiter chatbot questions that appear after clicking 'Apply' on Naukri. Call this first with no arguments to get the question, then call it with the 'answer' string parameter to submit the response. Repeat until all recruiter questions are answered and the popup closes. "
-            "After performing your operations, analyze the retrieved information and present a final response. "
-            "IMPORTANT: Do not close the browser session. Keep the browser open."
+            f"You are a helpful browser automation agent. Your task is: Apply to the already open job description tabs. "
+            "All valid job description tabs have already been opened for you programmatically in the browser. "
+            "The active page is set to the first job listing. "
+            "For each job listing: "
+            "1. Fetch the job details using 'fetch_job_details' or get the page text to verify. "
+            "2. Click the Apply button using the 'click_apply_button' tool. "
+            "3. If any recruiter / chatbot popup questions show up, use 'manage_naukri_popup_question' to detect and answer them iteratively until the modal closes. "
+            "4. Once you have completed the application (or if it requires form-filling), perform the actions. "
+            "5. After successfully applying to the current job (or deciding it cannot be applied), close the active tab using 'close_current_tab'. This will automatically switch the active page to the next open job listing tab. "
+            "6. Repeat this process until you have applied to 5 unique jobs or processed all the open job listing tabs. "
+            "IMPORTANT: Do not attempt to search on naukri.com or click on any search listings page. All actionable direct jobs are already open. "
+            "Do not close the browser session at the end. Keep the browser open."
         ))
     ]
 

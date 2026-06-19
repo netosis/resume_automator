@@ -2,12 +2,17 @@ import os
 import re
 import json
 import time
+import random
 from typing import Optional, Dict, List, Any, Union
 from langchain_core.tools import tool
 from browser_tools import (
     PersistentBrowserManager,
     get_representation_header_and_body,
     clean_page_text
+)
+from js_templates import (
+    DETECT_NAUKRI_POPUP_JS,
+    GET_NEXT_NAUKRI_POPUP_QUESTION_JS
 )
 
 @tool
@@ -74,7 +79,7 @@ def search_naukri_via_url(job_title: str) -> str:
         page.goto(url, wait_until="load")
         
         # Wait a small moment for dynamic loads
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(random.randint(1250, 1750))
         
         title = page.title()
         current_url = page.url
@@ -100,58 +105,7 @@ def manage_naukri_popup_question(answer: Optional[str] = None) -> str:
         
         # 1. Detect if popup question element and input are visible
         # Evaluate layout elements using JS in the page
-        popup_info = page.evaluate(r'''
-            () => {
-                const inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']");
-                if (!inputEl) {
-                    return { detected: false };
-                }
-                
-                const parentContainer = inputEl.closest("div[class*='modal'], div[class*='container'], div[class*='dialog'], body");
-                let questionText = "";
-                
-                if (parentContainer) {
-                    const elements = Array.from(parentContainer.querySelectorAll("div, p, span, h1, h2, h3, h4, li"));
-                    const questionCandidates = elements.filter(el => {
-                        const text = el.innerText ? el.innerText.trim() : "";
-                        if (text.length > 5 && text.length < 250 && text.includes("?") && !el.querySelector("input, textarea, button")) {
-                            return true;
-                        }
-                        return false;
-                    });
-                    
-                    if (questionCandidates.length > 0) {
-                        const visibleQuestions = questionCandidates.filter(el => {
-                            const rect = el.getBoundingClientRect();
-                            return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
-                        });
-                        if (visibleQuestions.length > 0) {
-                            questionText = visibleQuestions[visibleQuestions.length - 1].innerText.trim();
-                        }
-                    }
-                }
-                
-                if (!questionText) {
-                    const siblings = Array.from(document.querySelectorAll("div, p, span"));
-                    const textBubbles = siblings.filter(el => {
-                        const text = el.innerText ? el.innerText.trim() : "";
-                        return text.length > 5 && text.length < 200 && !el.querySelector("input, textarea, button") && 
-                               (el.className.includes("msg") || el.className.includes("bubble") || el.className.includes("text") || el.className.includes("question"));
-                    });
-                    if (textBubbles.length > 0) {
-                        questionText = textBubbles[textBubbles.length - 1].innerText.trim();
-                    } else {
-                        questionText = "Recruiter question popup detected (unable to parse exact question text).";
-                    }
-                }
-                
-                return {
-                    detected: true,
-                    question: questionText,
-                    placeholder: inputEl.placeholder || ""
-                };
-            }
-        ''')
+        popup_info = page.evaluate(DETECT_NAUKRI_POPUP_JS)
         
         if not popup_info.get("detected"):
             return "No active recruiter question popup detected on the page."
@@ -167,7 +121,7 @@ def manage_naukri_popup_question(answer: Optional[str] = None) -> str:
         # Answer is provided, fill it
         input_locator = page.locator("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']").first
         input_locator.fill(answer)
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(random.randint(250, 750))
         
         # Click the Save/Submit button
         save_button = page.locator("button:has-text('Save'), button:has-text('Submit'), button:has-text('Next'), button:has-text('Send'), [class*='save'] button, [class*='Save'] button").first
@@ -183,41 +137,10 @@ def manage_naukri_popup_question(answer: Optional[str] = None) -> str:
             
         save_button.click()
         # Wait for potential new question or modal close
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(random.randint(1750, 2250))
         
         # Check new state
-        new_popup_info = page.evaluate(r'''
-            () => {
-                const inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']");
-                if (!inputEl) {
-                    return null;
-                }
-                const parentContainer = inputEl.closest("div[class*='modal'], div[class*='container'], div[class*='dialog'], body");
-                let questionText = "";
-                
-                if (parentContainer) {
-                    const elements = Array.from(parentContainer.querySelectorAll("div, p, span, h1, h2, h3, h4, li"));
-                    const questionCandidates = elements.filter(el => {
-                        const text = el.innerText ? el.innerText.trim() : "";
-                        if (text.length > 5 && text.length < 250 && text.includes("?") && !el.querySelector("input, textarea, button")) {
-                            return true;
-                        }
-                        return false;
-                    });
-                    
-                    if (questionCandidates.length > 0) {
-                        const visibleQuestions = questionCandidates.filter(el => {
-                            const rect = el.getBoundingClientRect();
-                            return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
-                        });
-                        if (visibleQuestions.length > 0) {
-                            questionText = visibleQuestions[visibleQuestions.length - 1].innerText.trim();
-                        }
-                    }
-                }
-                return { question: questionText || "Next question bubble" };
-            }
-        ''')
+        new_popup_info = page.evaluate(GET_NEXT_NAUKRI_POPUP_QUESTION_JS)
         
         if new_popup_info is None:
             return "Successfully submitted the answer. The recruiter popup question modal has closed."

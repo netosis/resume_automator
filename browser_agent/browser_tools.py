@@ -2,9 +2,19 @@ import os
 import re
 import json
 import time
+import random
 from typing import Optional, Dict, List, Any, Type, Union
 from playwright.sync_api import sync_playwright, Playwright, BrowserContext, Page
 from langchain_core.tools import tool
+from js_templates import (
+    GET_COMPRESSED_DOM_JS,
+    SCROLL_DOWN_JS,
+    SCROLL_UP_JS,
+    FIND_APPLY_BUTTON_JS,
+    REMOVE_CLICK_TARGET_ATTR_JS,
+    GET_FORM_FIELDS_JS,
+    GET_TAG_NAME_JS
+)
 
 class PersistentBrowserManager:
     """
@@ -505,7 +515,9 @@ def prune_accessibility_tree(node: dict, mode: str = "interactive", depth: int =
     return results
 
 
-ACCESSIBILITY_TREE_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accessibility_tree.json")
+OUTPUTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+os.makedirs(OUTPUTS_DIR, exist_ok=True)
+ACCESSIBILITY_TREE_JSON_PATH = os.path.join(OUTPUTS_DIR, "accessibility_tree.json")
 
 _LAST_ACCESSIBILITY_STATE = {
     "url": None,
@@ -578,7 +590,7 @@ def get_accessibility_info(page: Page, mode: str = "interactive") -> Union[str, 
     return False
 
 
-COMPRESSED_DOM_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compressed_dom.json")
+COMPRESSED_DOM_JSON_PATH = os.path.join(OUTPUTS_DIR, "compressed_dom.json")
 
 _LAST_DOM_STATE = {
     "url": None,
@@ -594,142 +606,7 @@ def get_compressed_dom_info(page: Page, mode: str = "interactive") -> Union[str,
     global _LAST_DOM_STATE
     try:
         # Evaluate DOM compression in browser
-        compressed_elements = page.evaluate(r'''
-            (mode) => {
-                function cleanText(text) {
-                    return text.replace(/\s+/g, ' ').trim();
-                }
-                
-                function isInteractive(el) {
-                    const tagName = el.tagName.toLowerCase();
-                    const role = el.getAttribute('role');
-                    const interactiveRoles = new Set([
-                        'button', 'link', 'checkbox', 'radio', 'combobox', 
-                        'listbox', 'menuitem', 'tab', 'slider', 'searchbox', 
-                        'spinbutton', 'switch', 'option', 'textbox'
-                    ]);
-                    const interactiveTags = new Set([
-                        'button', 'a', 'input', 'select', 'textarea', 'option', 'details', 'summary'
-                    ]);
-                    
-                    if (interactiveTags.has(tagName)) return true;
-                    if (role && interactiveRoles.has(role.toLowerCase())) return true;
-                    if (el.onclick || el.getAttribute('onclick')) return true;
-                    return false;
-                }
-                
-                function getUniqueSelector(el) {
-                    if (el.id) {
-                        return `#${el.id}`;
-                    }
-                    let attrTests = ['data-testid', 'data-test-id', 'data-qa', 'name', 'placeholder'];
-                    for (let attr of attrTests) {
-                        let val = el.getAttribute(attr);
-                        if (val) {
-                            let safeVal = val.replace(/"/g, '\\"');
-                            let sel = `[${attr}="${safeVal}"]`;
-                            try {
-                                if (document.querySelectorAll(sel).length === 1) {
-                                    return sel;
-                                }
-                            } catch(e) {}
-                        }
-                    }
-                    
-                    let path = [];
-                    let parent = el;
-                    while (parent && parent.nodeType === Node.ELEMENT_NODE) {
-                        let tag = parent.tagName.toLowerCase();
-                        if (parent.id) {
-                            path.unshift(`#${parent.id}`);
-                            break;
-                        } else {
-                            let siblings = Array.from(parent.parentNode ? parent.parentNode.children : []);
-                            let index = siblings.indexOf(parent) + 1;
-                            path.unshift(`${tag}:nth-child(${index})`);
-                        }
-                        parent = parent.parentNode;
-                    }
-                    return path.join(' > ');
-                }
-                
-                const results = [];
-                const ignoredTags = new Set([
-                    'script', 'style', 'noscript', 'iframe', 'svg', 'path', 'g', 'meta', 'head', 'link'
-                ]);
-                
-                function traverse(el) {
-                    const tagName = el.tagName.toLowerCase();
-                    if (ignoredTags.has(tagName)) return;
-                    
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width === 0 && rect.height === 0) return;
-                    if (window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden') return;
-                    
-                    let directText = "";
-                    for (let child of el.childNodes) {
-                        if (child.nodeType === Node.TEXT_NODE) {
-                            directText += child.nodeValue;
-                        }
-                    }
-                    directText = cleanText(directText);
-                    
-                    const isSelfInteractive = isInteractive(el);
-                    
-                    let isRelevant = false;
-                    if (mode === 'interactive') {
-                        isRelevant = isSelfInteractive;
-                    } else if (mode === 'reading') {
-                        const contentTags = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'span', 'div']);
-                        isRelevant = isSelfInteractive || (contentTags.has(tagName) && directText.length > 5);
-                    } else { // full
-                        isRelevant = isSelfInteractive || directText.length > 0;
-                    }
-                    
-                    if (isRelevant) {
-                        const selector = getUniqueSelector(el);
-                        const item = {
-                            tag: tagName,
-                            selector: selector
-                        };
-                        
-                        if (directText) {
-                            item.text = directText.slice(0, 100);
-                        }
-                        
-                        if (tagName === 'input') {
-                            item.type = el.type || 'text';
-                            if (el.placeholder) item.placeholder = el.placeholder;
-                            if (el.value) item.value = el.value;
-                            if (el.checked) item.checked = true;
-                            if (el.disabled) item.disabled = true;
-                        } else if (tagName === 'textarea') {
-                            if (el.placeholder) item.placeholder = el.placeholder;
-                            if (el.value) item.value = el.value;
-                            if (el.disabled) item.disabled = true;
-                        } else if (tagName === 'select') {
-                            if (el.value) item.value = el.value;
-                            if (el.disabled) item.disabled = true;
-                        }
-                        
-                        if (el.getAttribute('placeholder') && !item.placeholder) item.placeholder = el.getAttribute('placeholder');
-                        if (el.getAttribute('aria-label')) item.ariaLabel = el.getAttribute('aria-label');
-                        if (el.getAttribute('name')) item.name = el.getAttribute('name');
-                        if (el.getAttribute('role')) item.role = el.getAttribute('role');
-                        if (el.disabled) item.disabled = true;
-                        
-                        results.push(item);
-                    }
-                    
-                    for (let child of el.children) {
-                        traverse(child);
-                    }
-                }
-                
-                traverse(document.body);
-                return results;
-            }
-        ''', mode)
+        compressed_elements = page.evaluate(GET_COMPRESSED_DOM_JS, mode)
     except Exception as e:
         print(f"[PersistentBrowserManager] Error compressing DOM: {e}")
         return "Failed to compress DOM."
@@ -833,7 +710,7 @@ def open_website(url: str, mode: str = "interactive") -> str:
         page.goto(url, wait_until="load")
         
         # Wait a small moment for dynamic loads
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(random.randint(1250, 1750))
         
         title = page.title()
         current_url = page.url
@@ -894,7 +771,7 @@ def click_on_element(selector: str, mode: str = "interactive") -> str:
         locator.click()
         
         # Wait for potential navigation or state change / tab creation
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(random.randint(1750, 2250))
         
         # Backup check: if there are multiple pages, ensure we are on the latest one
         if len(manager.context.pages) > 1:
@@ -941,10 +818,10 @@ def input_text_into_element(selector: str, text: str, mode: str = "interactive")
         locator.fill("")
         
         print(f"[Tool: input_text_into_element] Entering text into: {selector}")
-        locator.type(text, delay=50) # Type with a small realistic delay
+        locator.type(text, delay=random.randint(40, 60)) # Type with a small realistic delay
         
         # Wait a moment for dynamic page updates after typing
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(random.randint(750, 1250))
         
         rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
@@ -967,12 +844,12 @@ def scroll_page(direction: str, mode: str = "interactive") -> str:
         page = manager.get_page()
         
         if direction.lower() == "down":
-            page.evaluate("window.scrollBy(0, window.innerHeight);")
-            page.wait_for_timeout(1500)
+            page.evaluate(SCROLL_DOWN_JS)
+            page.wait_for_timeout(random.randint(1250, 1750))
             status = "Successfully scrolled down the page."
         elif direction.lower() == "up":
-            page.evaluate("window.scrollBy(0, -window.innerHeight);")
-            page.wait_for_timeout(1500)
+            page.evaluate(SCROLL_UP_JS)
+            page.wait_for_timeout(random.randint(1250, 1750))
             status = "Successfully scrolled up the page."
         else:
             return "Invalid direction. Please specify 'down' or 'up'."
@@ -1104,40 +981,7 @@ def click_apply_button(mode: str = "interactive") -> str:
         page = manager.get_page()
         
         # Scan page for a visible apply button/link using JS
-        target_info = page.evaluate(r'''
-            () => {
-                const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'));
-                const patterns = [
-                    /^apply$/i,
-                    /^apply\s+now$/i,
-                    /apply\s+with\s+indeed/i,
-                    /submit\s+your\s+application/i,
-                    /submit\s+application/i,
-                    /apply\s+on\s+(company\s+)?site/i,
-                    /easy\s+apply/i,
-                    /apply\s+on\s+company\s+website/i,
-                    /continue/i,
-                    /next/i,
-                    /apply/i
-                ];
-                
-                const visible = candidates.filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
-                });
-                
-                for (const pattern of patterns) {
-                    for (const el of visible) {
-                        const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
-                        if (pattern.test(text)) {
-                            el.setAttribute('data-automation-click-target', 'true');
-                            return { text: text, tagName: el.tagName.toLowerCase() };
-                        }
-                    }
-                }
-                return null;
-            }
-        ''')
+        target_info = page.evaluate(FIND_APPLY_BUTTON_JS)
         
         if not target_info:
             return "No matching 'Apply' button or link was found on the current page."
@@ -1153,15 +997,10 @@ def click_apply_button(mode: str = "interactive") -> str:
         locator.click()
         
         # Clean up temporary attribute
-        page.evaluate('''
-            () => {
-                const el = document.querySelector('[data-automation-click-target="true"]');
-                if (el) el.removeAttribute('data-automation-click-target');
-            }
-        ''')
+        page.evaluate(REMOVE_CLICK_TARGET_ATTR_JS)
         
         # Wait for potential page navigation or tab opening
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(random.randint(1750, 2250))
         
         # Backup check: if there are multiple pages, ensure we are on the latest one
         if len(manager.context.pages) > 1:
@@ -1203,95 +1042,7 @@ def get_form_fields() -> str:
         page = manager.get_page()
         
         # Evaluate Javascript to collect form details
-        form_details = page.evaluate(r'''
-            () => {
-                const fields = Array.from(document.querySelectorAll('input, select, textarea, [role="checkbox"], [role="radio"]'));
-                const result = [];
-                
-                fields.forEach((el, index) => {
-                    // Skip hidden elements
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width === 0 && rect.height === 0) return;
-                    if (window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden') return;
-                    
-                    const tagName = el.tagName.toLowerCase();
-                    const type = el.type || '';
-                    const id = el.id || '';
-                    const name = el.name || '';
-                    const value = el.value || '';
-                    const placeholder = el.placeholder || '';
-                    const isChecked = el.checked || false;
-                    const isRequired = el.required || false;
-                    
-                    // Find associated label text
-                    let labelText = '';
-                    if (id) {
-                        const labelEl = document.querySelector(`label[for="${id}"]`);
-                        if (labelEl) {
-                            labelText = labelEl.innerText.trim();
-                        }
-                    }
-                    if (!labelText) {
-                        // Try surrounding label
-                        const parentLabel = el.closest('label');
-                        if (parentLabel) {
-                            labelText = parentLabel.innerText.trim();
-                        }
-                    }
-                    if (!labelText) {
-                        // Try aria-label or title
-                        labelText = el.getAttribute('aria-label') || el.getAttribute('title') || '';
-                    }
-                    labelText = labelText.replace(/\s+/g, ' ').trim();
-                    
-                    // Collect dropdown options
-                    let options = [];
-                    if (tagName === 'select') {
-                        options = Array.from(el.options).map(opt => ({
-                            text: opt.text.trim(),
-                            value: opt.value
-                        }));
-                    }
-                    
-                    // Generate unique CSS selectors
-                    let selector = '';
-                    if (id) {
-                        selector = `#${id}`;
-                    } else if (name) {
-                        selector = `${tagName}[name="${name}"]`;
-                    } else if (type && type !== 'text') {
-                        selector = `${tagName}[type="${type}"]`;
-                    } else {
-                        // Unique path-based selector logic
-                        let path = [];
-                        let curr = el;
-                        while (curr && curr !== document.body) {
-                            let sibIdx = Array.from(curr.parentElement?.children || []).indexOf(curr) + 1;
-                            path.unshift(`${curr.tagName.toLowerCase()}:nth-child(${sibIdx})`);
-                            curr = curr.parentElement;
-                        }
-                        selector = path.join(' > ');
-                    }
-                    
-                    result.push({
-                        index: index + 1,
-                        tagName,
-                        type,
-                        id,
-                        name,
-                        labelText,
-                        placeholder,
-                        value,
-                        isChecked,
-                        isRequired,
-                        options,
-                        selector
-                    });
-                });
-                
-                return result;
-            }
-        ''')
+        form_details = page.evaluate(GET_FORM_FIELDS_JS)
         
         if not form_details:
             return "No visible form fields were found on the current page."
@@ -1350,7 +1101,7 @@ def select_dropdown_option(selector: str, option_value_or_text: str, mode: str =
                 # Fallback to passing it directly as string option
                 locator.select_option(option_value_or_text)
             
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(random.randint(750, 1250))
         rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully selected option '{option_value_or_text}' from element: '{selector}'.\n\n"
@@ -1381,7 +1132,7 @@ def set_checkbox_state(selector: str, checked: bool, mode: str = "interactive") 
         else:
             locator.uncheck()
             
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(random.randint(750, 1250))
         rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully set state of element '{selector}' to checked={checked}.\n\n"
@@ -1412,7 +1163,7 @@ def upload_file(selector: str, file_path: str, mode: str = "interactive") -> str
         print(f"[Tool: upload_file] Uploading file '{abs_path}' to: {selector}")
         locator.set_input_files(abs_path)
         
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(random.randint(1250, 1750))
         rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (
             f"Successfully uploaded file '{abs_path}' to element: '{selector}'.\n\n"
@@ -1420,6 +1171,42 @@ def upload_file(selector: str, file_path: str, mode: str = "interactive") -> str
         )
     except Exception as e:
         return f"Failed to upload file to element '{selector}'. Error: {str(e)}"
+
+
+def _evaluate_field_heuristics(field: dict) -> Optional[Union[str, bool]]:
+    label = field.get("labelText", "").lower()
+    type_ = field.get("type", "").lower()
+    tag = field.get("tagName", "").lower()
+    
+    # Helper to resolve select options
+    def get_select_option():
+        options = field.get("options", [])
+        if options:
+            target_opt = options[1] if len(options) > 1 else options[0]
+            return target_opt.get("value") or target_opt.get("text")
+        return "ai-engineer"
+
+    # Define a clean list of rule tuples: (predicate_fn, value_fn_or_literal)
+    rules = [
+        (lambda l, t, tg: "first" in l or "given" in l, "John"),
+        (lambda l, t, tg: "last" in l or "family" in l, "Doe"),
+        (lambda l, t, tg: "name" in l, "John Doe"),
+        (lambda l, t, tg: "email" in l, "johndoe@example.com"),
+        (lambda l, t, tg: "phone" in l or "mobile" in l, lambda l: "+91" if ("code" in l or "country" in l) else "9876543210"),
+        (lambda l, t, tg: "hear" in l, "LinkedIn"),
+        (lambda l, t, tg: tg == "select" or "role" in l, lambda l: get_select_option()),
+        (lambda l, t, tg: t == "checkbox" or t == "radio" or "terms" in l, True)
+    ]
+    
+    for predicate, val_provider in rules:
+        if predicate(label, type_, tag):
+            if callable(val_provider):
+                try:
+                    return val_provider(label)
+                except TypeError:
+                    return val_provider()
+            return val_provider
+    return None
 
 
 @tool
@@ -1462,39 +1249,14 @@ def generate_fill_values(fields_json: str) -> str:
         for field in fields:
             if not isinstance(field, dict):
                 continue
-            label = field.get("labelText", "").lower()
             selector = field.get("selector", "")
-            type_ = field.get("type", "").lower()
-            tag = field.get("tagName", "").lower()
-            
             if not selector:
                 continue
 
-            # Heuristics for typical form fields
-            if "first" in label or "given" in label:
-                fill_values[selector] = "John"
-            elif "last" in label or "family" in label:
-                fill_values[selector] = "Doe"
-            elif "name" in label:
-                fill_values[selector] = "John Doe"
-            elif "email" in label:
-                fill_values[selector] = "johndoe@example.com"
-            elif "phone" in label or "mobile" in label:
-                if "code" in label or "country" in label:
-                    fill_values[selector] = "+91"
-                else:
-                    fill_values[selector] = "9876543210"
-            elif "hear" in label:
-                fill_values[selector] = "LinkedIn"
-            elif tag == "select" or "role" in label:
-                options = field.get("options", [])
-                if options:
-                    target_opt = options[1] if len(options) > 1 else options[0]
-                    fill_values[selector] = target_opt.get("value") or target_opt.get("text")
-                else:
-                    fill_values[selector] = "ai-engineer"
-            elif type_ == "checkbox" or type_ == "radio" or "terms" in label:
-                fill_values[selector] = True
+            val = _evaluate_field_heuristics(field)
+            if val is not None:
+                fill_values[selector] = val
+
 
         # Fallback values if none generated
         if not fill_values:
@@ -1510,6 +1272,70 @@ def generate_fill_values(fields_json: str) -> str:
         return json.dumps(fill_values, indent=2)
     except Exception as e:
         return json.dumps({"error": f"Failed to parse or generate values: {str(e)}"})
+
+
+def _handle_form_text(locator, value, page) -> str:
+    locator.fill("")
+    locator.type(str(value), delay=random.randint(20, 40))
+    page.wait_for_timeout(random.randint(50, 450))
+    return f"Filled '{value}'"
+
+def _handle_form_select(locator, value, page) -> str:
+    val_str = str(value)
+    try:
+        locator.select_option(value=val_str)
+    except Exception:
+        try:
+            locator.select_option(label=val_str)
+        except Exception:
+            locator.select_option(val_str)
+    page.wait_for_timeout(random.randint(50, 550))
+    return f"Selected option '{value}'"
+
+def _handle_form_checkbox(locator, value, page) -> str:
+    checked = bool(value)
+    if checked:
+        locator.check()
+    else:
+        locator.uncheck()
+    page.wait_for_timeout(random.randint(50, 450))
+    return f"Set checked={checked}"
+
+def _handle_form_custom_combobox(locator, value, page) -> str:
+    val_str = str(value)
+    locator.click()
+    page.wait_for_timeout(random.randint(350, 850))
+    
+    option_locator = page.locator('[role="option"]').filter(has_text=val_str).first
+    if not option_locator.is_visible():
+        option_locator = page.locator(f'text="{val_str}"').first
+    if not option_locator.is_visible():
+        option_locator = page.locator(f'[role="listbox"] >> text="{val_str}"').first
+        
+    if option_locator.is_visible():
+        option_locator.click()
+        page.wait_for_timeout(random.randint(150, 650))
+        return f"Selected custom option '{val_str}'"
+    else:
+        tag_name = locator.evaluate(GET_TAG_NAME_JS)
+        is_input = tag_name == "input" or locator.get_attribute("role") == "combobox"
+        if is_input:
+            locator.fill("")
+            locator.type(val_str, delay=random.randint(40, 60))
+            page.wait_for_timeout(random.randint(50, 550))
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(random.randint(150, 650))
+            return f"Typed and entered '{val_str}' into custom combobox"
+        else:
+            return f"Warning: Option '{val_str}' not found and custom selector is not input"
+
+def _handle_form_file(locator, value, page) -> str:
+    abs_path = os.path.abspath(str(value))
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"File to upload not found at {abs_path}")
+    locator.set_input_files(abs_path)
+    page.wait_for_timeout(random.randint(250, 750))
+    return f"Uploaded '{abs_path}'"
 
 
 @tool
@@ -1555,6 +1381,16 @@ def fill_entire_form(fields_data_json: str, mode: str = "interactive") -> str:
         manager = PersistentBrowserManager.get_instance()
         page = manager.get_page()
         
+        # Strategy mapping to reduce if-else branching
+        handlers = {
+            "text": _handle_form_text,
+            "select": _handle_form_select,
+            "checkbox": _handle_form_checkbox,
+            "radio": _handle_form_checkbox,
+            "custom_combobox": _handle_form_custom_combobox,
+            "file": _handle_form_file,
+        }
+        
         results = []
         for idx, field in enumerate(fields):
             if not isinstance(field, dict):
@@ -1573,78 +1409,17 @@ def fill_entire_form(fields_data_json: str, mode: str = "interactive") -> str:
                 locator = page.locator(selector).first
                 locator.scroll_into_view_if_needed()
                 
-                if field_type == "text":
-                    locator.fill("")
-                    locator.type(str(value), delay=30)
-                    page.wait_for_timeout(200)
-                    results.append(f"Filled '{value}' into '{selector}'")
-                    
-                elif field_type == "select":
-                    val_str = str(value)
-                    try:
-                        locator.select_option(value=val_str)
-                    except Exception:
-                        try:
-                            locator.select_option(label=val_str)
-                        except Exception:
-                            locator.select_option(val_str)
-                    page.wait_for_timeout(300)
-                    results.append(f"Selected option '{value}' in '{selector}'")
-                    
-                elif field_type in ("checkbox", "radio"):
-                    checked = bool(value)
-                    if checked:
-                        locator.check()
-                    else:
-                        locator.uncheck()
-                    page.wait_for_timeout(200)
-                    results.append(f"Set checked={checked} for '{selector}'")
-                    
-                elif field_type == "custom_combobox":
-                    val_str = str(value)
-                    locator.click()
-                    page.wait_for_timeout(600)
-                    
-                    option_locator = page.locator('[role="option"]').filter(has_text=val_str).first
-                    if not option_locator.is_visible():
-                        option_locator = page.locator(f'text="{val_str}"').first
-                    if not option_locator.is_visible():
-                        option_locator = page.locator(f'[role="listbox"] >> text="{val_str}"').first
-                        
-                    if option_locator.is_visible():
-                        option_locator.click()
-                        page.wait_for_timeout(400)
-                        results.append(f"Selected custom option '{val_str}' in '{selector}'")
-                    else:
-                        # Fallback: type and enter
-                        tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
-                        is_input = tag_name == "input" or locator.get_attribute("role") == "combobox"
-                        if is_input:
-                            locator.fill("")
-                            locator.type(val_str, delay=50)
-                            page.wait_for_timeout(300)
-                            page.keyboard.press("Enter")
-                            page.wait_for_timeout(400)
-                            results.append(f"Typed and entered '{val_str}' into custom combobox '{selector}'")
-                        else:
-                            results.append(f"Warning: Option '{val_str}' not found and custom selector is not input for '{selector}'")
-                            
-                elif field_type == "file":
-                    abs_path = os.path.abspath(str(value))
-                    if not os.path.exists(abs_path):
-                        results.append(f"Error: File to upload not found at {abs_path} for '{selector}'")
-                    else:
-                        locator.set_input_files(abs_path)
-                        page.wait_for_timeout(500)
-                        results.append(f"Uploaded '{abs_path}' to '{selector}'")
-                        
+                handler = handlers.get(field_type)
+                if handler:
+                    msg = handler(locator, value, page)
+                    results.append(f"{msg} for '{selector}'")
                 else:
                     results.append(f"Field {idx}: skipped (unknown type '{field_type}')")
                     
             except Exception as e:
                 results.append(f"Error executing field '{selector}': {str(e)}")
                 
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(random.randint(750, 1250))
         rep_header, rep_body = get_representation_header_and_body(page, mode)
         
         summary = "Form filling execution summary:\n" + "\n".join(f" - {res}" for res in results)
@@ -1676,7 +1451,7 @@ def select_custom_combobox_option(selector: str, option_text: str, mode: str = "
         locator.click()
         
         # Wait for potential dropdown menu/listbox/options to be visible
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(random.randint(750, 1250))
         
         # Look for option elements with role="option" or containing option_text
         option_locator = page.locator('[role="option"]').filter(has_text=option_text).first
@@ -1692,7 +1467,7 @@ def select_custom_combobox_option(selector: str, option_text: str, mode: str = "
         if option_locator.is_visible():
             print(f"[Tool: select_custom_combobox_option] Clicking option containing: '{option_text}'")
             option_locator.click()
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(random.randint(750, 1250))
             rep_header, rep_body = get_representation_header_and_body(page, mode)
             return (
                 f"Successfully selected option '{option_text}' from custom dropdown: '{selector}'.\n\n"
@@ -1701,15 +1476,15 @@ def select_custom_combobox_option(selector: str, option_text: str, mode: str = "
         else:
             # Maybe the dropdown requires searching/typing first?
             # Let's try typing the option_text into the input/button if it is an input field
-            tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
+            tag_name = locator.evaluate(GET_TAG_NAME_JS)
             is_input = tag_name == "input" or locator.get_attribute("role") == "combobox"
             if is_input:
                 print(f"[Tool: select_custom_combobox_option] Option list not visible. Attempting to type '{option_text}' and press Enter...")
                 locator.fill("")
-                locator.type(option_text, delay=100)
-                page.wait_for_timeout(500)
+                locator.type(option_text, delay=random.randint(90, 110))
+                page.wait_for_timeout(random.randint(250, 750))
                 page.keyboard.press("Enter")
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(random.randint(750, 1250))
                 rep_header, rep_body = get_representation_header_and_body(page, mode)
                 return (
                     f"Attempted to type and enter option '{option_text}' into: '{selector}'.\n\n"
@@ -1763,7 +1538,7 @@ def go_back(mode: str = "interactive") -> str:
         manager = PersistentBrowserManager.get_instance()
         page = manager.get_page()
         page.go_back()
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(random.randint(1250, 1750))
         
         rep_header, rep_body = get_representation_header_and_body(page, mode)
         return (

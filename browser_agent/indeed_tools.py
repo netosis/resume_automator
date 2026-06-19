@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import random
 from typing import Optional, Dict, List, Any, Union
 from langchain_core.tools import tool
 from browser_tools import (
@@ -9,6 +10,14 @@ from browser_tools import (
     get_representation_header_and_body,
     clean_page_text
 )
+from js_templates import (
+    INDEED_JOB_FETCH_JS,
+    INDEED_HEADER_INFO_JS,
+    INDEED_DESC_TEXT_JS,
+    INDEED_APPLY_BUTTONS_JS,
+    INDEED_RIGHT_PANE_TEXT_JS
+)
+
 
 @tool
 def search_indeed_via_url(job_title: str) -> str:
@@ -33,7 +42,7 @@ def search_indeed_via_url(job_title: str) -> str:
         page.goto(url, wait_until="load")
         
         # Wait a small moment for dynamic loads
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(random.randint(1750, 2250))
         
         title = page.title()
         current_url = page.url
@@ -60,36 +69,7 @@ def indeed_job_fetch() -> str:
         title = page.title()
         
         # Evaluate Javascript in page to extract clean job card listings
-        jobs_json = page.evaluate(r'''
-            () => {
-                const cards = Array.from(document.querySelectorAll('.job_seen_beacon, td.resultContent, .cardOutline'));
-                return cards.map((card, index) => {
-                    // Extract Title
-                    const titleEl = card.querySelector('h2.jobTitle, a.jcs-JobTitle, a[id^="job_"]');
-                    const titleText = titleEl ? titleEl.innerText.trim() : "N/A";
-                    
-                    // Extract Company
-                    const companyEl = card.querySelector('[data-testid="company-name"], .companyName, .company_location [class*="company"]');
-                    const companyText = companyEl ? companyEl.innerText.trim() : "N/A";
-                    
-                    // Extract Location
-                    const locationEl = card.querySelector('[data-testid="text-location"], .companyLocation, .location');
-                    const locationText = locationEl ? locationEl.innerText.trim() : "N/A";
-                    
-                    // Extract Snippet
-                    const snippetEl = card.querySelector('.job-snippet, [class*="snippet"], .summary');
-                    const snippetText = snippetEl ? snippetEl.innerText.trim() : "N/A";
-                    
-                    return {
-                        index: index + 1,
-                        title: titleText,
-                        company: companyText,
-                        location: locationText,
-                        summary: snippetText
-                    };
-                });
-            }
-        ''')
+        jobs_json = page.evaluate(INDEED_JOB_FETCH_JS)
         
         if not jobs_json:
             return "No job cards found on the current page."
@@ -123,78 +103,17 @@ def fetch_indeed_job_details() -> str:
         page = manager.get_page()
         
         # 1. Extract Job Info Header (Title, Company, etc.)
-        header_info = page.evaluate(r'''
-            () => {
-                const header = document.querySelector('.jobsearch-JobInfoHeader-title-container, .jobsearch-JobInfoHeader-title, h1[class*="jobsearch-JobInfoHeader-title"]');
-                const title = header ? header.innerText.trim() : "N/A";
-                
-                const companyEl = document.querySelector('[data-testid="inlineHeader-companyName"] a, [data-testid="inlineHeader-companyName"]');
-                const company = companyEl ? companyEl.innerText.trim() : "N/A";
-                
-                const locationEl = document.querySelector('[data-testid="inlineHeader-companyLocation"], .jobsearch-JobInfoHeader-subtitle [class*="location"]');
-                const location = locationEl ? locationEl.innerText.trim() : "N/A";
-                
-                return { title, company, location };
-            }
-        ''')
+        header_info = page.evaluate(INDEED_HEADER_INFO_JS)
         
         # 2. Extract Description Text
-        desc_text = page.evaluate(r'''
-            () => {
-                const descEl = document.querySelector('#jobDescriptionText, .jobsearch-jobDescriptionText');
-                if (descEl) {
-                    return descEl.innerText.trim();
-                }
-                
-                // Fallback to searching containers that look like descriptions
-                const containers = Array.from(document.querySelectorAll('div[class*="description"], div[class*="Description"]'));
-                for (const container of containers) {
-                    const rect = container.getBoundingClientRect();
-                    if (rect.width > 100 && rect.height > 100 && window.getComputedStyle(container).visibility !== 'hidden') {
-                        return container.innerText.trim();
-                    }
-                }
-                return "";
-            }
-        ''')
+        desc_text = page.evaluate(INDEED_DESC_TEXT_JS)
         
         # 3. Check for Apply button presence and type
-        apply_buttons = page.evaluate(r'''
-            () => {
-                const buttons = Array.from(document.querySelectorAll('button, a, input[type="button"], input[type="submit"]'));
-                const applyInfo = [];
-                
-                for (const btn of buttons) {
-                    const text = (btn.innerText || btn.value || '').trim();
-                    const isVisible = btn.getBoundingClientRect().width > 0 && btn.getBoundingClientRect().height > 0 && window.getComputedStyle(btn).visibility !== 'hidden';
-                    
-                    if (isVisible && (
-                        text.toLowerCase().includes('apply now') || 
-                        text.toLowerCase().includes('apply with indeed') || 
-                        text.toLowerCase().includes('apply on company site') ||
-                        text.toLowerCase().includes('apply on company\'s website') ||
-                        btn.id.includes('indeedApplyButton') ||
-                        btn.className.includes('IndeedApplyButton')
-                    )) {
-                        applyInfo.push({
-                            text: text,
-                            tag: btn.tagName.toLowerCase(),
-                            id: btn.id || "N/A"
-                        });
-                    }
-                }
-                return applyInfo;
-            }
-        ''')
+        apply_buttons = page.evaluate(INDEED_APPLY_BUTTONS_JS)
         
         if not desc_text and header_info["title"] == "N/A":
             # If nothing specific was found, fall back to general text extraction of the viewport/right-pane
-            right_pane_text = page.evaluate(r'''
-                () => {
-                    const pane = document.querySelector('#jobsearch-ViewJobLayout-jobDetails, .jobsearch-ViewJobLayout-jobDetails, #vjs-container');
-                    return pane ? pane.innerText.trim() : "";
-                }
-            ''')
+            right_pane_text = page.evaluate(INDEED_RIGHT_PANE_TEXT_JS)
             if right_pane_text:
                 desc_text = right_pane_text
             else:
