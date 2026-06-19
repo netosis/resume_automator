@@ -9,19 +9,20 @@ The browser agent is a multi-component system that automates web browser interac
 ```mermaid
 graph TB
     subgraph Agent["Agent Layer"]
-        AgentDemo["agent_demo.py<br/>Main Agent Loop"]
+        AgentDemo["agent_demo.py / naukri_agent_demo.py<br/>Main Agent Loop"]
         RetryLogic["Retry Logic<br/>Exponential Backoff"]
         TokenTracking["Token Counter<br/>Cost Analytics"]
     end
     
     subgraph LLM["Language Model Layer"]
-        Gemini["Gemini API<br/>gemini-2.0-flash"]
+        Gemini["Gemini API<br/>gemini-2.5-flash / 1.5-flash"]
         DeepSeek["DeepSeek API<br/>deepseek-chat"]
     end
     
     subgraph Tools["Tool Layer"]
-        BrowserTools["browser_tools.py<br/>14+ Browser Automation Tools"]
+        BrowserTools["browser_tools.py<br/>Form Filling & Navigation"]
         AccessibilityTools["accessibility_tree.py<br/>Browser Helpers & Utilities"]
+        JSTemplates["js_templates.py<br/>Extracted Javascript Scripts"]
     end
     
     subgraph Browser["Browser Layer"]
@@ -40,6 +41,7 @@ graph TB
     DeepSeek -->|Tool Calls| BrowserTools
     BrowserTools -->|Uses| AccessibilityTools
     BrowserTools -->|Uses| PersistentMgr
+    BrowserTools -->|Imports| JSTemplates
     AccessibilityTools -->|Uses| PersistentMgr
     PersistentMgr -->|Controls| Playwright
     Playwright -->|Launches| OS
@@ -96,6 +98,38 @@ sequenceDiagram
 - Uses accessibility tree instead of full DOM
 - Reduces token usage by 80%+
 - More reliable element identification
+
+### 5. **Strategy Pattern** (Form Filling & Heuristics)
+- Decouples interaction types (text, select, checkbox, custom_combobox, file) from the main execution loop in `fill_entire_form`
+- Employs a mapping dictionary (`handlers`) delegating tasks to modular helper functions
+- Dynamically resolves field filling strategy at runtime, improving readability and maintainability
+- Similarly uses predicate-based rules mapping to evaluate and generate mock details in `generate_fill_values`
+
+```mermaid
+graph TD
+    Input["Form Fields JSON Input"] --> Parse["Parse JSON to Fields List"]
+    Parse --> Loop["For each field in Fields"]
+    Loop --> Type{Field Type?}
+    
+    subgraph Handlers["Handlers Mapping (Strategy Pattern)"]
+        Type -->|text| HText["_handle_form_text"]
+        Type -->|select| HSelect["_handle_form_select"]
+        Type -->|checkbox/radio| HCheck["_handle_form_checkbox"]
+        Type -->|custom_combobox| HCombo["_handle_form_custom_combobox"]
+        Type -->|file| HFile["_handle_form_file"]
+    end
+    
+    HText --> Execute["Execute Playwright Actions"]
+    HSelect --> Execute
+    HCheck --> Execute
+    HCombo --> Execute
+    HFile --> Execute
+    
+    Execute --> Wait["Random Wait Time"]
+    Wait --> Next{More fields?}
+    Next -->|Yes| Loop
+    Next -->|No| Success["Return Execution Summary & Updated A11y Tree"]
+```
 
 ## Execution Flow
 

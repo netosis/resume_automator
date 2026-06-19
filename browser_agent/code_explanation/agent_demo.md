@@ -18,17 +18,51 @@ graph TD
     G -->|google| F
     E --> H["Bind Tools to LLM"]
     F --> H
-    H --> I["Create Initial Message<br/>with Task Prompt"]
+    
+    H --> Prep["Programmatic Job Openings Prep<br/>(Navigate search URL, sift through listings, check Applied / Third-Party status, open direct links in tabs)"]
+    Prep --> I["Initialize Message History<br/>with Remaining Opened Job Tabs"]
     I --> J["Agent Loop"]
     J --> K["Invoke LLM with retry"]
     K --> L["LLM Response"]
     L --> M{Tool Calls?}
-    M -->|Yes| N["Execute Tools"]
+    M -->|Yes| N["Execute Tools (e.g. fill_entire_form, close_current_tab)"]
     M -->|No| O["Return Final Answer"]
     N --> P["Add Results to Messages"]
     P --> J
     O --> Q["Print Token Summary"]
     Q --> R["Return"]
+```
+
+## Programmatic Pre-Filtering Flow (Naukri)
+
+```mermaid
+graph TD
+    Start["Start Prep Phase"] --> Ext["Extract Job Role from prompt"]
+    Ext --> Nav["Open Naukri Search Page URL"]
+    Nav --> Cards["Locate srp-jobtuple-wrapper elements"]
+    Cards --> Count{Card Count > 0?}
+    Count -->|No| Wait["Wait & Retry once"]
+    Wait --> Cards
+    Count -->|Yes| Loop["For each Job Card (1 to N)"]
+    
+    Loop --> Delay["Random Delay (1-2s)"]
+    Delay --> Move["Move mouse slowly to link coordinates"]
+    Move --> Click["Click title link to open in new tab"]
+    Click --> Check["Evaluate job status on new tab (JS)"]
+    
+    Check --> Status{Job Status?}
+    Status -->|Already Applied| Skip1["Skip listing & close tab (delay 5-7s)"]
+    Status -->|Third-Party Site| Skip2["Log URL to skipped_third_party_jobs.txt<br/>& close tab (delay 5-7s)"]
+    Status -->|Direct & Unapplied| Keep["Keep tab open for LLM processing"]
+    
+    Skip1 --> Front["Switch search tab to front"]
+    Skip2 --> Front
+    Keep --> Front
+    
+    Front --> Next{More cards?}
+    Next -->|Yes| Loop
+    Next -->|No| Close["Close search listings page tab"]
+    Close --> Handoff["Hand off remaining open tabs to LLM Agent"]
 ```
 
 ## Retry Logic Flow
