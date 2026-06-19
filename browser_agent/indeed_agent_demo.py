@@ -3,7 +3,8 @@ import sys
 import time
 import random
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, SystemMessage
+import async_logger
 
 # Reconfigure stdout/stderr to UTF-8 on Windows to avoid cp1252/charmap print crashes
 if sys.platform.startswith("win"):
@@ -44,7 +45,6 @@ from browser_tools import (
     scroll_page,
     get_interactable_buttons,
     fetch_job_details,
-    click_apply_button,
     close_browser_session,
     get_form_fields,
     select_dropdown_option,
@@ -56,12 +56,14 @@ from browser_tools import (
     go_back,
     save_chat_transcript,
     fill_entire_form,
-    PersistentBrowserManager
+    PersistentBrowserManager,
+    update_agent_memory
 )
 from indeed_tools import (
     search_indeed_via_url,
     indeed_job_fetch,
-    fetch_indeed_job_details
+    fetch_indeed_job_details,
+    click_indeed_apply_button
 )
 
 # Global token tracker for handling force close cleanup
@@ -209,7 +211,7 @@ def run_browser_agent(prompt: str):
         scroll_page,
         get_interactable_buttons,
         fetch_job_details,
-        click_apply_button,
+        click_indeed_apply_button,
         close_browser_session,
         get_form_fields,
         select_dropdown_option,
@@ -239,6 +241,12 @@ def run_browser_agent(prompt: str):
     total_tool_input = 0
     total_tool_output = 0
 
+    state_summary = {
+        "completed_steps": [],
+        "extracted_data": {},
+        "next_immediate_step": ""
+    }
+
     messages = [
         HumanMessage(content=(
             f"You are a helpful browser automation agent. Your task is: {prompt}. "
@@ -251,14 +259,33 @@ def run_browser_agent(prompt: str):
             "- 'search_indeed_via_url': Navigate directly to job search on indeed.com. "
             "You have a batch form filling tool: "
             "- 'fill_entire_form': Clicks, types, and selects all fields on a form page at once using a list of field specifications. ALWAYS use this tool to fill form fields, checkboxes, dropdowns, and file uploads at once rather than filling them one by one. Use individual input/select tools only as a fallback. "
-            "You also have a specialized tool for clicking apply buttons: "
-            "- 'click_apply_button': Automatically searches the page for visible elements matching 'Apply', 'Apply on Company Site', etc. and clicks them, auto-switching tabs if a new page is opened. "
+            "You also have a specialized tool for clicking Indeed apply buttons: "
+            "- 'click_indeed_apply_button': Automatically searches the page for visible elements matching 'Apply', 'Apply on Company Site', etc. and clicks them, auto-switching tabs if a new page is opened. "
             "You also have specialized tools for browser navigation and tab management: "
             "- 'close_current_tab': Closes the currently active browser tab and switches to the last remaining open tab. Use this when a new tab was opened after clicking Apply or a job link and you are done with it. "
             "- 'go_back': Navigates the current browser tab back one step in browser history. "
             "After performing your operations, analyze the retrieved information and present a final response. "
-            "IMPORTANT: Do not close the browser session. Keep the browser open."
-        ))
+            "IMPORTANT: Do not close the browser session. Keep the browser open.\n\n"
+            "### STATEFUL SCRATCHPAD INSTRUCTIONS:\n"
+            "To optimize memory, you must maintain a running 'State Summary / Scratchpad'. "
+            "In every response, you MUST include a `<scratchpad>` XML block containing a JSON object summarizing your current state. "
+            "The JSON object must follow this structure:\n"
+            "{\n"
+            "  \"completed_steps\": [\"Brief description of step 1\", \"Brief description of step 2\"],\n"
+            "  \"extracted_data\": {\"key1\": \"value1\", \"key2\": \"value2\"},\n"
+            "  \"next_immediate_step\": \"What you plan to do next\"\n"
+            "}\n"
+            "Example format in your output:\n"
+            "<scratchpad>\n"
+            "{\n"
+            "  \"completed_steps\": [\"Opened indeed.com\", \"Searched for Python developer jobs\"],\n"
+            "  \"extracted_data\": {\"search_query\": \"Python developer\"},\n"
+            "  \"next_immediate_step\": \"Click on the first job link\"\n"
+            "}\n"
+            "</scratchpad>\n"
+            "Do not omit this block from your response! Always output it."
+        )),
+        SystemMessage(content=f"### CURRENT AGENT STATE SUMMARY:\n{json.dumps(state_summary, indent=2)}")
     ]
 
     _TOKEN_TRACKER["messages"] = messages
@@ -266,7 +293,11 @@ def run_browser_agent(prompt: str):
     session_id = getattr(manager, "session_id", time.strftime("%Y%m%d_%H%M%S"))
 
     max_steps = 35
+    last_response_content = None
     for step in range(max_steps):
+        # Update memory state (pruning and scratchpad maintenance)
+        update_agent_memory(messages, state_summary, last_response_content, keep_last_n_tool_outputs=2)
+        
         print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
         try:
             response = invoke_model_with_retry(model_with_tools, messages)
@@ -274,6 +305,7 @@ def run_browser_agent(prompt: str):
             print(f"\n[Agent Error]: API call failed after retries. Error: {e}")
             break
         messages.append(response)
+        last_response_content = response.content
         save_chat_transcript("indeed", messages, session_id)
 
         # Log LLM token usage if available
@@ -318,11 +350,14 @@ def run_browser_agent(prompt: str):
         if not response.tool_calls:
             # Log final response
             try:
+                sent_msgs = [{"role": type(m).__name__, "content": m.content} for m in messages[:-1]]
                 log_api_call(
                     caller_name="Final Response",
                     model_name=model_name,
                     input_tokens=llm_in,
-                    output_tokens=llm_out
+                    output_tokens=llm_out,
+                    sent_data=sent_msgs,
+                    response_data=response.content
                 )
             except Exception as e:
                 print(f"[Agent Warning] Failed to log final API call: {e}")
@@ -341,11 +376,14 @@ def run_browser_agent(prompt: str):
 
             # Log to the unified session log file specifically for this tool call
             try:
+                sent_msgs = [{"role": type(m).__name__, "content": m.content} for m in messages[:-1]]
                 log_api_call(
-                    caller_name=f"API Call for Tool: {tool_name}",
+                    caller_name=f"API Call requesting Tool: {tool_name}",
                     model_name=model_name,
                     input_tokens=llm_in,
-                    output_tokens=llm_out
+                    output_tokens=llm_out,
+                    sent_data={"messages": sent_msgs, "requested_tool_call": tool_call},
+                    response_data={"content": response.content, "tool_calls": response.tool_calls}
                 )
             except Exception as e:
                 print(f"[Agent Warning] Failed to log tool API call: {e}")
@@ -359,6 +397,19 @@ def run_browser_agent(prompt: str):
                     print(f"[Tool Response]: {result}")
                     print(f"[Token Usage]: Tool '{tool_name}' consumed: {input_tokens} (input) + {output_tokens} (output) = {input_tokens + output_tokens} total tokens\n")
                     
+                    # Log tool execution to unified session log
+                    try:
+                        log_api_call(
+                            caller_name=f"Tool Execute: {tool_name}",
+                            model_name="tool_local",
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            sent_data=tool_args,
+                            response_data=result_str
+                        )
+                    except Exception as le:
+                        print(f"[Agent Warning] Failed to log tool execution: {le}")
+
                     tool_token_logs.append({
                         "step": step + 1,
                         "tool_name": tool_name,
@@ -383,6 +434,19 @@ def run_browser_agent(prompt: str):
                     print(f"[Tool Error]: {error_msg}")
                     print(f"[Token Usage]: Tool '{tool_name}' error output: {error_tokens} tokens\n")
                     
+                    # Log tool execution error to unified session log
+                    try:
+                        log_api_call(
+                            caller_name=f"Tool Execute: {tool_name} (FAILED)",
+                            model_name="tool_local",
+                            input_tokens=input_tokens,
+                            output_tokens=error_tokens,
+                            sent_data=tool_args,
+                            response_data=error_msg
+                        )
+                    except Exception as le:
+                        print(f"[Agent Warning] Failed to log tool execution failure: {le}")
+
                     tool_token_logs.append({
                         "step": step + 1,
                         "tool_name": tool_name,
@@ -408,6 +472,19 @@ def run_browser_agent(prompt: str):
                 print(f"[Tool Error]: {error_msg}")
                 print(f"[Token Usage]: Tool '{tool_name}' error output: {error_tokens} tokens\n")
                 
+                # Log unregistered tool execution to unified session log
+                try:
+                    log_api_call(
+                        caller_name=f"Tool Execute: {tool_name} (UNREGISTERED)",
+                        model_name="tool_local",
+                        input_tokens=input_tokens,
+                        output_tokens=error_tokens,
+                        sent_data=tool_args,
+                        response_data=error_msg
+                    )
+                except Exception as le:
+                    print(f"[Agent Warning] Failed to log unregistered tool error: {le}")
+
                 tool_token_logs.append({
                     "step": step + 1,
                     "tool_name": tool_name,
@@ -483,7 +560,8 @@ if __name__ == "__main__":
         "fetch the job details using 'fetch_indeed_job_details' to examine the description and check the application button, "
         "click the 'Apply with Indeed' (or 'Apply now') button to open the application tab. "
         "On the application tab, fill out the form step-by-step (using 'get_form_fields' to read fields, "
-        "filling them at once using 'fill_entire_form', and clicking 'Continue' or 'Next' or using 'click_apply_button' to progress), "
+        "filling them at once using 'fill_entire_form', and clicking 'Continue' or 'Next' or using 'click_indeed_apply_button' to progress), "
+
         "finally click 'Submit your application' to complete it. After submitting, close the tab using "
         "'close_current_tab', return to the search results to select the next job, and repeat until "
         "you have applied to 5 unique jobs. Keep the browser open when complete."

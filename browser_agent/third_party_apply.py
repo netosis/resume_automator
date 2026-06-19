@@ -4,7 +4,8 @@ import time
 import random
 from pathlib import Path
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, SystemMessage
+import async_logger
 
 # Ensure modules in browser_agent can be imported
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +34,8 @@ from browser_tools import (
     PersistentBrowserManager,
     get_compressed_dom,
     save_chat_transcript,
-    fill_entire_form
+    fill_entire_form,
+    update_agent_memory
 )
 from naukri_tools import (
     naukri_job_fetch,
@@ -175,10 +177,38 @@ def run_apply_agent(target_url: str, resume_path: str):
         f"   - Upload Resume (file type): Upload the file located at: {resume_path}\n"
         "   - Privacy Policy / Terms (checkbox/radio type): Agree to terms (checked=True)\n"
         "5. Submit the application by clicking the submit button.\n"
-        "6. Do not close the browser context. Keep the browser open so the final submission screen can be inspected.\n"
+        "6. Do not close the browser context. Keep the browser open so the final submission screen can be inspected.\n\n"
+        "### STATEFUL SCRATCHPAD INSTRUCTIONS:\n"
+        "To optimize memory, you must maintain a running 'State Summary / Scratchpad'. "
+        "In every response, you MUST include a `<scratchpad>` XML block containing a JSON object summarizing your current state. "
+        "The JSON object must follow this structure:\n"
+        "{\n"
+        "  \"completed_steps\": [\"Brief description of step 1\", \"Brief description of step 2\"],\n"
+        "  \"extracted_data\": {\"key1\": \"value1\", \"key2\": \"value2\"},\n"
+        "  \"next_immediate_step\": \"What you plan to do next\"\n"
+        "}\n"
+        "Example format in your output:\n"
+        "<scratchpad>\n"
+        "{\n"
+        "  \"completed_steps\": [\"Opened job page\", \"Clicked apply button\"],\n"
+        "  \"extracted_data\": {\"job_title\": \"Software Engineer\"},\n"
+        "  \"next_immediate_step\": \"Fill the contact information form\"\n"
+        "}\n"
+        "</scratchpad>\n"
+        "Do not omit this block from your response! Always output it."
     )
 
-    messages = [HumanMessage(content=prompt)]
+    state_summary = {
+        "completed_steps": [],
+        "extracted_data": {},
+        "next_immediate_step": ""
+    }
+
+    import json
+    messages = [
+        HumanMessage(content=prompt),
+        SystemMessage(content=f"### CURRENT AGENT STATE SUMMARY:\n{json.dumps(state_summary, indent=2)}")
+    ]
     llm_call_token_logs = []
     
     manager = PersistentBrowserManager.get_instance()
@@ -186,6 +216,7 @@ def run_apply_agent(target_url: str, resume_path: str):
 
     try:
         max_steps = 15
+        last_response_content = None
         for step in range(max_steps):
             # Dynamic check for redirection to Workday
             try:
@@ -201,6 +232,9 @@ def run_apply_agent(target_url: str, resume_path: str):
             except Exception as e:
                 print(f"[Handoff Warning]: Failed to check browser state for Workday: {e}")
 
+            # Update memory state (pruning and scratchpad maintenance)
+            update_agent_memory(messages, state_summary, last_response_content, keep_last_n_tool_outputs=2)
+
             print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
             try:
                 response = invoke_model_with_retry(model_with_tools, messages)
@@ -209,6 +243,7 @@ def run_apply_agent(target_url: str, resume_path: str):
                 break
                 
             messages.append(response)
+            last_response_content = response.content
             save_chat_transcript("apply", messages, session_id)
 
             llm_in = 0
@@ -219,13 +254,26 @@ def run_apply_agent(target_url: str, resume_path: str):
 
             # Log to the unified session log file
             try:
+                sent_msgs = [{"role": type(m).__name__, "content": m.content} for m in messages[:-1]]
                 from browser_tools import log_api_call
-                log_api_call(
-                    caller_name="Main Agent Loop",
-                    model_name=model_name,
-                    input_tokens=llm_in,
-                    output_tokens=llm_out
-                )
+                if response.tool_calls:
+                    log_api_call(
+                        caller_name="Main Agent Loop API Call (requested tools)",
+                        model_name=model_name,
+                        input_tokens=llm_in,
+                        output_tokens=llm_out,
+                        sent_data={"messages": sent_msgs},
+                        response_data={"content": response.content, "tool_calls": response.tool_calls}
+                    )
+                else:
+                    log_api_call(
+                        caller_name="Main Agent Loop API Call (final)",
+                        model_name=model_name,
+                        input_tokens=llm_in,
+                        output_tokens=llm_out,
+                        sent_data={"messages": sent_msgs},
+                        response_data={"content": response.content}
+                    )
             except Exception as e:
                 print(f"[Agent Warning] Failed to log unified API call: {e}")
 
@@ -257,24 +305,89 @@ def run_apply_agent(target_url: str, resume_path: str):
                 tool_args = tool_call["args"]
                 tool_id = tool_call["id"]
 
-                print(f"[Agent Tool Call]: {tool_name} with args {tool_args}")
+                input_tokens = model.get_num_tokens(str(tool_args))
+                print(f"[Agent Tool Call]: {tool_name} with args {tool_args} | Input Size: {input_tokens} tokens")
+
+                # Log to the unified session log file specifically for this tool call
+                try:
+                    sent_msgs = [{"role": type(m).__name__, "content": m.content} for m in messages[:-1]]
+                    from browser_tools import log_api_call
+                    log_api_call(
+                        caller_name=f"API Call requesting Tool: {tool_name}",
+                        model_name=model_name,
+                        input_tokens=llm_in,
+                        output_tokens=llm_out,
+                        sent_data={"messages": sent_msgs, "requested_tool_call": tool_call},
+                        response_data={"content": response.content, "tool_calls": response.tool_calls}
+                    )
+                except Exception as e:
+                    print(f"[Agent Warning] Failed to log tool API call: {e}")
 
                 matching_tool = next((t for t in tools if t.name == tool_name), None)
                 if matching_tool:
                     try:
                         result = matching_tool.invoke(tool_args)
                         result_str = str(result)
+                        output_tokens = model.get_num_tokens(result_str)
                         print(f"[Tool Response]: {result_str[:400]}... [truncated for display]")
+                        print(f"[Token Usage]: Tool '{tool_name}' consumed: {input_tokens} (input) + {output_tokens} (output) tokens\n")
+                        
+                        # Log tool execution to unified session log
+                        try:
+                            from browser_tools import log_api_call
+                            log_api_call(
+                                caller_name=f"Tool Execute: {tool_name}",
+                                model_name="tool_local",
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                sent_data=tool_args,
+                                response_data=result_str
+                            )
+                        except Exception as le:
+                            print(f"[Agent Warning] Failed to log tool execution: {le}")
+
                         messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
                         save_chat_transcript("apply", messages, session_id)
                     except Exception as e:
                         error_msg = f"Error running tool '{tool_name}': {str(e)}"
+                        error_tokens = model.get_num_tokens(error_msg)
                         print(f"[Tool Error]: {error_msg}")
+                        
+                        # Log tool execution error to unified session log
+                        try:
+                            from browser_tools import log_api_call
+                            log_api_call(
+                                caller_name=f"Tool Execute: {tool_name} (FAILED)",
+                                model_name="tool_local",
+                                input_tokens=input_tokens,
+                                output_tokens=error_tokens,
+                                sent_data=tool_args,
+                                response_data=error_msg
+                            )
+                        except Exception as le:
+                            print(f"[Agent Warning] Failed to log tool execution failure: {le}")
+
                         messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
                         save_chat_transcript("apply", messages, session_id)
                 else:
                     error_msg = f"Tool '{tool_name}' is not registered."
+                    error_tokens = model.get_num_tokens(error_msg)
                     print(f"[Tool Error]: {error_msg}")
+                    
+                    # Log unregistered tool execution to unified session log
+                    try:
+                        from browser_tools import log_api_call
+                        log_api_call(
+                            caller_name=f"Tool Execute: {tool_name} (UNREGISTERED)",
+                            model_name="tool_local",
+                            input_tokens=input_tokens,
+                            output_tokens=error_tokens,
+                            sent_data=tool_args,
+                            response_data=error_msg
+                        )
+                    except Exception as le:
+                        print(f"[Agent Warning] Failed to log unregistered tool error: {le}")
+
                     messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
                     save_chat_transcript("apply", messages, session_id)
         else:

@@ -525,3 +525,229 @@ GET_NEXT_NAUKRI_POPUP_QUESTION_JS = r'''
     return { question: questionText || "Next question bubble" };
 }
 '''
+
+GET_NAUKRI_CHATBOT_A11Y_JS = r'''
+() => {
+    const drawer = document.querySelector(".chatbot_MessageContainer") || document.querySelector(".chatbot_DrawerContentWrapper");
+    if (!drawer) {
+        return { detected: false };
+    }
+    
+    function cleanText(text) {
+        return text.replace(/\s+/g, ' ').trim();
+    }
+    
+    function isInteractive(el) {
+        const tagName = el.tagName.toLowerCase();
+        const role = el.getAttribute('role');
+        const interactiveRoles = new Set([
+            'button', 'link', 'checkbox', 'radio', 'combobox', 
+            'listbox', 'menuitem', 'tab', 'slider', 'searchbox', 
+            'spinbutton', 'switch', 'option', 'textbox'
+        ]);
+        const interactiveTags = new Set([
+            'button', 'a', 'input', 'select', 'textarea', 'option', 'details', 'summary'
+        ]);
+        
+        if (interactiveTags.has(tagName)) return true;
+        if (role && interactiveRoles.has(role.toLowerCase())) return true;
+        if (el.onclick || el.getAttribute('onclick')) return true;
+        
+        // Custom check for chatbot option pills/buttons
+        const className = el.className || "";
+        if (typeof className === 'string' && (
+            className.includes('option') || 
+            className.includes('choice') || 
+            className.includes('pill') || 
+            className.includes('btn') || 
+            className.includes('button')
+        )) {
+            if (el.children.length === 0 || (el.children.length === 1 && el.children[0].tagName.toLowerCase() === 'span')) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    function getUniqueSelector(el) {
+        if (el.id) {
+            return `#${el.id}`;
+        }
+        let attrTests = ['data-testid', 'data-test-id', 'data-qa', 'name', 'placeholder'];
+        for (let attr of attrTests) {
+            let val = el.getAttribute(attr);
+            if (val) {
+                let safeVal = val.replace(/"/g, '\\"');
+                let sel = `[${attr}="${safeVal}"]`;
+                try {
+                    if (document.querySelectorAll(sel).length === 1) {
+                        return sel;
+                    }
+                } catch(e) {}
+            }
+        }
+        
+        let path = [];
+        let parent = el;
+        while (parent && parent.nodeType === Node.ELEMENT_NODE) {
+            let tag = parent.tagName.toLowerCase();
+            if (parent.id) {
+                path.unshift(`#${parent.id}`);
+                break;
+            } else {
+                let siblings = Array.from(parent.parentNode ? parent.parentNode.children : []);
+                let index = siblings.indexOf(parent) + 1;
+                path.unshift(`${tag}:nth-child(${index})`);
+            }
+            parent = parent.parentNode;
+        }
+        return path.join(' > ');
+    }
+
+    const botItems = Array.from(drawer.querySelectorAll(".botItem.chatbot_ListItem, [class*='botItem'][class*='chatbot_ListItem']"));
+    const itemsData = botItems.map((botItem, idx) => {
+        const results = [];
+        
+        function traverse(el) {
+            const tagName = el.tagName.toLowerCase();
+            if (new Set(['script', 'style', 'noscript', 'iframe', 'svg', 'path', 'g', 'meta', 'head', 'link']).has(tagName)) return;
+            
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return;
+            if (window.getComputedStyle(el).display === 'none' || window.getComputedStyle(el).visibility === 'hidden') return;
+            
+            let directText = "";
+            for (let child of el.childNodes) {
+                if (child.nodeType === Node.TEXT_NODE) {
+                    directText += child.nodeValue;
+                }
+            }
+            directText = cleanText(directText);
+            
+            const isSelfInteractive = isInteractive(el);
+            
+            if (isSelfInteractive || directText.length > 0) {
+                const selector = getUniqueSelector(el);
+                const itemNode = {
+                    tag: tagName,
+                    selector: selector,
+                    isInteractive: isSelfInteractive
+                };
+                
+                if (directText) {
+                    itemNode.text = directText;
+                }
+                
+                if (tagName === 'input') {
+                    itemNode.type = el.type || 'text';
+                    if (el.placeholder) itemNode.placeholder = el.placeholder;
+                    if (el.value) itemNode.value = el.value;
+                    if (el.checked) itemNode.checked = true;
+                    if (el.disabled) itemNode.disabled = true;
+                } else if (tagName === 'textarea') {
+                    if (el.placeholder) itemNode.placeholder = el.placeholder;
+                    if (el.value) itemNode.value = el.value;
+                    if (el.disabled) itemNode.disabled = true;
+                } else if (tagName === 'select') {
+                    if (el.value) itemNode.value = el.value;
+                    if (el.disabled) itemNode.disabled = true;
+                    itemNode.options = Array.from(el.options).map(opt => ({
+                        text: opt.text.trim(),
+                        value: opt.value
+                    }));
+                }
+                
+                if (el.getAttribute('placeholder') && !itemNode.placeholder) itemNode.placeholder = el.getAttribute('placeholder');
+                if (el.getAttribute('aria-label')) itemNode.ariaLabel = el.getAttribute('aria-label');
+                if (el.getAttribute('name')) itemNode.name = el.getAttribute('name');
+                if (el.getAttribute('role')) itemNode.role = el.getAttribute('role');
+                if (el.disabled) itemNode.disabled = true;
+                
+                results.push(itemNode);
+            }
+            
+            for (let child of el.children) {
+                traverse(child);
+            }
+        }
+        
+        traverse(botItem);
+        
+        // Extract a clean representation of the question/message text
+        const messageTexts = results.filter(r => !r.isInteractive && r.text).map(r => r.text);
+        const questionText = messageTexts.join(" ");
+        
+        // Filter interactive elements for the final tree
+        const interactiveElements = results.filter(r => r.isInteractive);
+        
+        return {
+            itemIndex: idx + 1,
+            questionText: questionText || "No message text",
+            elements: interactiveElements
+        };
+    });
+    
+    return {
+        detected: true,
+        items: itemsData
+    };
+}
+'''
+
+FIND_NAUKRI_APPLY_BUTTON_JS = r'''
+() => {
+    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'));
+    const patterns = [
+        /^apply$/i,
+        /^apply\s+now$/i,
+        /apply/i
+    ];
+    
+    const visible = candidates.filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+    });
+    
+    for (const pattern of patterns) {
+        for (const el of visible) {
+            const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+            if (pattern.test(text)) {
+                el.setAttribute('data-automation-click-target', 'true');
+                return { text: text, tagName: el.tagName.toLowerCase() };
+            }
+        }
+    }
+    return null;
+}
+'''
+
+FIND_INDEED_APPLY_BUTTON_JS = r'''
+() => {
+    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'));
+    const patterns = [
+        /^apply\s+now$/i,
+        /apply\s+with\s+indeed/i,
+        /apply\s+on\s+(company\s+)?site/i,
+        /apply\s+on\s+company\s+website/i,
+        /^apply$/i
+    ];
+    
+    const visible = candidates.filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+    });
+    
+    for (const pattern of patterns) {
+        for (const el of visible) {
+            const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+            if (pattern.test(text)) {
+                el.setAttribute('data-automation-click-target', 'true');
+                return { text: text, tagName: el.tagName.toLowerCase() };
+            }
+        }
+    }
+    return null;
+}
+'''
+
+

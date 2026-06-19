@@ -5,17 +5,21 @@ import time
 import random
 from typing import Optional, Dict, List, Any, Union
 from langchain_core.tools import tool
+import async_logger
 from browser_tools import (
     PersistentBrowserManager,
     get_representation_header_and_body,
-    clean_page_text
+    clean_page_text,
+    move_mouse_to_element_and_click
 )
 from js_templates import (
     INDEED_JOB_FETCH_JS,
     INDEED_HEADER_INFO_JS,
     INDEED_DESC_TEXT_JS,
     INDEED_APPLY_BUTTONS_JS,
-    INDEED_RIGHT_PANE_TEXT_JS
+    INDEED_RIGHT_PANE_TEXT_JS,
+    FIND_INDEED_APPLY_BUTTON_JS,
+    REMOVE_CLICK_TARGET_ATTR_JS
 )
 
 
@@ -135,4 +139,65 @@ def fetch_indeed_job_details() -> str:
         )
     except Exception as e:
         return f"Failed to fetch Indeed job details. Error: {str(e)}"
+
+@tool
+def click_indeed_apply_button(mode: str = "interactive") -> str:
+    """
+    Searches the current page for visible Indeed 'Apply', 'Apply with Indeed', 'Apply now', or similar buttons/links and clicks them.
+    Automatically detects if a new tab was opened, switches the active browser session to the new tab, and returns its content.
+    Returns confirmation and the updated pruned accessibility tree if it has changed, otherwise False.
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        
+        # Scan page for a visible apply button/link using JS
+        target_info = page.evaluate(FIND_INDEED_APPLY_BUTTON_JS)
+        
+        if not target_info:
+            return "No matching Indeed 'Apply' button or link was found on the current page."
+            
+        selector = '[data-automation-click-target="true"]'
+        locator = page.locator(selector).first
+        locator.scroll_into_view_if_needed()
+        
+        # Keep track of active page before click
+        old_page = page
+        
+        print(f"[Tool: click_indeed_apply_button] Clicking apply element: <{target_info['tagName']}> with text '{target_info['text']}'")
+        move_mouse_to_element_and_click(page, locator)
+        
+        # Clean up temporary attribute
+        page.evaluate(REMOVE_CLICK_TARGET_ATTR_JS)
+        
+        # Wait for potential page navigation or tab opening
+        page.wait_for_timeout(random.randint(1750, 2250))
+        
+        # Backup check: if there are multiple pages, ensure we are on the latest one
+        if len(manager.context.pages) > 1:
+            latest_page = manager.context.pages[-1]
+            if latest_page != manager.page:
+                print(f"[PersistentBrowserManager] Backup check: Switching active page to the latest tab.")
+                manager.page = latest_page
+                
+        current_page = manager.get_page()
+        rep_header, rep_body = get_representation_header_and_body(current_page, mode)
+        
+        if current_page != old_page:
+            return (
+                f"Successfully clicked the Apply element: '{target_info['text']}'.\n"
+                f"NOTICE: A new tab was opened and the browser session automatically switched to it.\n"
+                f"New Tab URL: '{current_page.url}'\n"
+                f"New Tab Title: '{current_page.title()}'\n\n"
+                f"{rep_header} of the NEW tab:\n{rep_body}"
+            )
+        else:
+            return (
+                f"Successfully clicked the Apply element: '{target_info['text']}'.\n\n"
+                f"{rep_header}:\n{rep_body}"
+            )
+            
+    except Exception as e:
+        return f"Failed to locate or click the Indeed Apply button. Error: {str(e)}"
+
 

@@ -15,6 +15,7 @@ from js_templates import (
     GET_FORM_FIELDS_JS,
     GET_TAG_NAME_JS
 )
+from async_logger import log_api_call, log_api_call_async, save_chat_transcript, get_session_id
 
 class PersistentBrowserManager:
     """
@@ -32,7 +33,7 @@ class PersistentBrowserManager:
         self.browser_type: str = os.getenv("BROWSER_TYPE", "brave").lower()
         self.browser_profile: str = os.getenv("BROWSER_PROFILE", "Default")
         self.incognito: bool = os.getenv("BROWSER_INCOGNITO", "false").lower() == "true"
-        self.session_id: str = time.strftime("%Y%m%d_%H%M%S")
+        self.session_id: str = get_session_id()
         self.api_call_logs: List[Dict[str, Any]] = []
 
     @classmethod
@@ -367,6 +368,69 @@ def clean_page_text(text: str) -> str:
     # Collapse multiple sequential newlines into a single newline
     text = re.sub(r'\n+', '\n', text)
     return text.strip()
+
+_CURRENT_MOUSE_X = 960.0
+_CURRENT_MOUSE_Y = 540.0
+
+
+def move_mouse_to_coordinates(page: Page, target_x: float, target_y: float, steps: Optional[int] = None) -> None:
+    """
+    Moves the virtual mouse cursor slowly to target_x, target_y in steps with small timeouts,
+    making the cursor path visible on screen.
+    """
+    global _CURRENT_MOUSE_X, _CURRENT_MOUSE_Y
+    
+    if steps is None:
+        steps = random.randint(30, 50)
+        
+    start_x = _CURRENT_MOUSE_X
+    start_y = _CURRENT_MOUSE_Y
+    
+    for i in range(1, steps + 1):
+        t = i / steps
+        # Easing easeInOutCubic:
+        t_eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+        
+        curr_x = start_x + (target_x - start_x) * t_eased
+        curr_y = start_y + (target_y - start_y) * t_eased
+        
+        try:
+            page.mouse.move(curr_x, curr_y)
+        except Exception:
+            pass
+        page.wait_for_timeout(random.randint(8, 15))
+        
+    _CURRENT_MOUSE_X = target_x
+    _CURRENT_MOUSE_Y = target_y
+
+
+def move_mouse_to_element_and_click(page: Page, locator) -> bool:
+    """
+    Moves the mouse cursor slowly from its current position to the center of the element,
+    then clicks it, making the action visible to the user.
+    """
+    try:
+        locator.scroll_into_view_if_needed()
+        box = locator.bounding_box()
+        if box:
+            x = box['x'] + box['width'] / 2
+            y = box['y'] + box['height'] / 2
+            
+            # Slow movement to target (x, y)
+            move_mouse_to_coordinates(page, x, y)
+            page.wait_for_timeout(random.randint(150, 300)) # Small delay at destination
+            page.mouse.click(x, y)
+            return True
+        else:
+            locator.click()
+            return True
+    except Exception as e:
+        print(f"[move_mouse_to_element_and_click Warning] Failed to move mouse: {e}")
+        try:
+            locator.click()
+            return True
+        except Exception:
+            return False
 
 
 
@@ -768,7 +832,7 @@ def click_on_element(selector: str, mode: str = "interactive") -> str:
         old_page = page
         
         print(f"[Tool: click_on_element] Clicking element: {selector}")
-        locator.click()
+        move_mouse_to_element_and_click(page, locator)
         
         # Wait for potential navigation or state change / tab creation
         page.wait_for_timeout(random.randint(1750, 2250))
@@ -994,7 +1058,7 @@ def click_apply_button(mode: str = "interactive") -> str:
         old_page = page
         
         print(f"[Tool: click_apply_button] Clicking apply element: <{target_info['tagName']}> with text '{target_info['text']}'")
-        locator.click()
+        move_mouse_to_element_and_click(page, locator)
         
         # Clean up temporary attribute
         page.evaluate(REMOVE_CLICK_TARGET_ATTR_JS)
@@ -1303,7 +1367,7 @@ def _handle_form_checkbox(locator, value, page) -> str:
 
 def _handle_form_custom_combobox(locator, value, page) -> str:
     val_str = str(value)
-    locator.click()
+    move_mouse_to_element_and_click(page, locator)
     page.wait_for_timeout(random.randint(350, 850))
     
     option_locator = page.locator('[role="option"]').filter(has_text=val_str).first
@@ -1313,7 +1377,7 @@ def _handle_form_custom_combobox(locator, value, page) -> str:
         option_locator = page.locator(f'[role="listbox"] >> text="{val_str}"').first
         
     if option_locator.is_visible():
-        option_locator.click()
+        move_mouse_to_element_and_click(page, option_locator)
         page.wait_for_timeout(random.randint(150, 650))
         return f"Selected custom option '{val_str}'"
     else:
@@ -1448,7 +1512,7 @@ def select_custom_combobox_option(selector: str, option_text: str, mode: str = "
         locator.scroll_into_view_if_needed()
         
         print(f"[Tool: select_custom_combobox_option] Clicking dropdown button/combobox: {selector}")
-        locator.click()
+        move_mouse_to_element_and_click(page, locator)
         
         # Wait for potential dropdown menu/listbox/options to be visible
         page.wait_for_timeout(random.randint(750, 1250))
@@ -1466,7 +1530,7 @@ def select_custom_combobox_option(selector: str, option_text: str, mode: str = "
             
         if option_locator.is_visible():
             print(f"[Tool: select_custom_combobox_option] Clicking option containing: '{option_text}'")
-            option_locator.click()
+            move_mouse_to_element_and_click(page, option_locator)
             page.wait_for_timeout(random.randint(750, 1250))
             rep_header, rep_body = get_representation_header_and_body(page, mode)
             return (
@@ -1512,7 +1576,16 @@ def close_current_tab() -> str:
             return "Cannot close the current tab because it is the only tab open. Use close_browser_session if you want to close the browser."
             
         current_page = manager.page
+        
+        # Move mouse slowly to a simulated close area (e.g. x=900, y=0)
+        try:
+            move_mouse_to_coordinates(current_page, 900.0, 0.0)
+            current_page.wait_for_timeout(random.randint(150, 300))
+        except Exception:
+            pass
+            
         current_page.close()
+
         
         # Switch to the last remaining page
         remaining_pages = [p for p in manager.context.pages if not p.is_closed()]
@@ -1564,98 +1637,74 @@ def close_browser_session() -> str:
         return f"Failed to close browser session. Error: {str(e)}"
 
 
-def log_api_call(caller_name: str, model_name: str, input_tokens: int, output_tokens: int):
+
+def parse_scratchpad(response_content):
     """
-    Logs an LLM API call's token usage to the active session log file.
-    All API calls in the current browser session are logged to a single file.
+    Attempts to extract the JSON scratchpad content from the response content.
+    Looks for <scratchpad>...</scratchpad> tags.
     """
+    if not response_content:
+        return None
     try:
-        from pathlib import Path
-        manager = PersistentBrowserManager.get_instance()
-        if not hasattr(manager, "session_id") or not manager.session_id:
-            manager.session_id = time.strftime("%Y%m%d_%H%M%S")
-            manager.api_call_logs = []
-
-        log_entry = {
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "caller": caller_name,
-            "model": model_name,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens
-        }
-        manager.api_call_logs.append(log_entry)
-
-        # Write/Update the session API calls log file
-        log_dir = Path(__file__).parent.parent / "logs"
-        log_dir.mkdir(exist_ok=True)
-        session_log_file = log_dir / f"session_api_calls_{manager.session_id}.json"
-        
-        with open(session_log_file, "w", encoding="utf-8") as f:
-            json.dump(manager.api_call_logs, f, indent=4)
-            
-        print(f"[Session Token Logger] Logged API call from '{caller_name}' to {session_log_file}")
+        match = re.search(r"<scratchpad>(.*?)</scratchpad>", response_content, re.DOTALL)
+        if match:
+            content = match.group(1).strip()
+            return json.loads(content)
     except Exception as e:
-        print(f"[Session Token Logger Warning] Failed to log API call: {e}")
+        print(f"[Scratchpad Parser Warning] Failed to parse scratchpad JSON: {e}")
+    return None
 
 
-def save_chat_transcript(platform: str, messages: list, session_id: str):
+def prune_old_tool_messages(messages, keep_last_n_tool_outputs=2):
     """
-    Logs the total chat transcript to a text file.
-    Includes all the messages sent to the LLM (Human, AI, Tool, System),
-    the response from the model, and the tools being called with their arguments and results.
+    Scans the message history and prunes the content of older ToolMessages
+    to reduce token usage, keeping only the last N tool outputs fully intact.
     """
-    try:
-        import time
-        import json
-        from pathlib import Path
-        log_dir = Path(__file__).parent.parent / "logs"
-        log_dir.mkdir(exist_ok=True)
-        filename = log_dir / f"{platform}_chat_transcript_{session_id}.txt"
-        
-        # Match tool call IDs to names
-        tool_call_id_to_name = {}
-        for msg in messages:
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    if isinstance(tc, dict) and "id" in tc and "name" in tc:
-                        tool_call_id_to_name[tc["id"]] = tc["name"]
-                        
-        transcript_lines = []
-        transcript_lines.append("=" * 80)
-        transcript_lines.append(f"AGENT CHAT TRANSCRIPT - Platform: {platform.upper()}")
-        transcript_lines.append(f"Session ID: {session_id}")
-        transcript_lines.append(f"Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        transcript_lines.append("=" * 80)
-        transcript_lines.append("\n")
-        
-        for idx, msg in enumerate(messages):
-            msg_type = type(msg).__name__
-            transcript_lines.append(f"--- Message {idx + 1} ({msg_type}) ---")
+    tool_message_indices = [i for i, msg in enumerate(messages) if type(msg).__name__ == "ToolMessage"]
+    
+    if len(tool_message_indices) > keep_last_n_tool_outputs:
+        prune_indices = tool_message_indices[:-keep_last_n_tool_outputs]
+        for idx in prune_indices:
+            msg = messages[idx]
+            original_content = str(msg.content)
+            if len(original_content) > 300:
+                short_summary = original_content[:150].replace('\n', ' ') + "..."
+                msg.content = f"[Detailed output of tool {getattr(msg, 'tool_call_id', 'unknown')} has been pruned to save context memory. Preview: {short_summary}]"
+
+
+def update_agent_memory(messages, state_summary, response_content, keep_last_n_tool_outputs=2):
+    """
+    Updates the agent memory by:
+    1. Parsing scratchpad from LLM response and merging it into state_summary.
+    2. Keeping a single up-to-date SystemMessage for state_summary in the history.
+    3. Pruning older ToolMessage outputs.
+    """
+    from langchain_core.messages import SystemMessage
+    
+    parsed = parse_scratchpad(response_content)
+    if parsed:
+        if "completed_steps" in parsed and isinstance(parsed["completed_steps"], list):
+            for step_desc in parsed["completed_steps"]:
+                if step_desc not in state_summary["completed_steps"]:
+                    state_summary["completed_steps"].append(step_desc)
+        if "extracted_data" in parsed and isinstance(parsed["extracted_data"], dict):
+            state_summary["extracted_data"].update(parsed["extracted_data"])
+        if "next_immediate_step" in parsed:
+            state_summary["next_immediate_step"] = parsed["next_immediate_step"]
+
+    scratchpad_content = f"### CURRENT AGENT STATE SUMMARY:\n{json.dumps(state_summary, indent=2)}"
+    
+    scratchpad_msg_idx = -1
+    for i, msg in enumerate(messages):
+        if type(msg).__name__ == "SystemMessage" and msg.content.startswith("### CURRENT AGENT STATE SUMMARY:"):
+            scratchpad_msg_idx = i
+            break
             
-            if msg_type == "HumanMessage":
-                transcript_lines.append(f"[USER/PROMPT]:\n{msg.content}\n")
-            elif msg_type == "SystemMessage":
-                transcript_lines.append(f"[SYSTEM MESSAGE]:\n{msg.content}\n")
-            elif msg_type == "AIMessage":
-                transcript_lines.append(f"[AI THOUGHTS/RESPONSE]:\n{msg.content or '(No text content)'}\n")
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    transcript_lines.append("Proposed Tool Call(s):")
-                    for tc in msg.tool_calls:
-                        if isinstance(tc, dict):
-                            transcript_lines.append(f"  - Tool: {tc.get('name')} | Arguments: {tc.get('args')} | Call ID: {tc.get('id')}")
-                    transcript_lines.append("")
-            elif msg_type == "ToolMessage":
-                tool_name = tool_call_id_to_name.get(msg.tool_call_id, "unknown_tool")
-                transcript_lines.append(f"[TOOL RESPONSE: '{tool_name}'] (Call ID: {msg.tool_call_id}):\n{msg.content}\n")
-            else:
-                transcript_lines.append(f"[UNKNOWN MESSAGE TYPE]:\n{msg.content}\n")
-                
-            transcript_lines.append("-" * 60 + "\n")
-            
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write("\n".join(transcript_lines))
-        print(f"[Transcript Logger] Chat transcript saved/updated at: {filename}")
-    except Exception as e:
-        print(f"[Transcript Logger Warning] Failed to save chat transcript: {e}")
+    if scratchpad_msg_idx != -1:
+        messages[scratchpad_msg_idx] = SystemMessage(content=scratchpad_content)
+    else:
+        messages.insert(1, SystemMessage(content=scratchpad_content))
+
+    prune_old_tool_messages(messages, keep_last_n_tool_outputs)
+
 

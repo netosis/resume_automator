@@ -1,8 +1,12 @@
-# agent_demo.py - Main Agent Loop
+# Agent Execution Loops (naukri_agent_demo.py / indeed_agent_demo.py)
 
 ## Overview
 
-`agent_demo.py` implements the core agent execution loop. It orchestrates the interaction between an LLM (Gemini or DeepSeek) and browser automation tools, handling retries, token tracking, and step-by-step task execution.
+The browser agent scripts (`naukri_agent_demo.py` and `indeed_agent_demo.py`) implement the main agent execution loop. They orchestrate interaction between LLMs (Gemini/DeepSeek) and browser automation tools, incorporating:
+1. **Programmatic Pre-filtering & Tab Preparation** (to minimize LLM navigation work).
+2. **Stateful Scratchpad Memory** (to maintain compact structured state).
+3. **Tool Output Pruning** (to prevent message context bloat).
+4. **Retry Strategies** (to handle transient API failures).
 
 ## High-Level Agent Flow
 
@@ -20,9 +24,10 @@ graph TD
     F --> H
     
     H --> Prep["Programmatic Job Openings Prep<br/>(Navigate search URL, sift through listings, check Applied / Third-Party status, open direct links in tabs)"]
-    Prep --> I["Initialize Message History<br/>with Remaining Opened Job Tabs"]
+    Prep --> I["Initialize Message History & Stateful Scratchpad"]
     I --> J["Agent Loop"]
-    J --> K["Invoke LLM with retry"]
+    J --> Mem["Update Agent Memory:<br/>1. Parse scratchpad from last response<br/>2. Update state summary SystemMessage<br/>3. Prune older ToolMessage outputs"]
+    Mem --> K["Invoke LLM with retry"]
     K --> L["LLM Response"]
     L --> M{Tool Calls?}
     M -->|Yes| N["Execute Tools (e.g. fill_entire_form, close_current_tab)"]
@@ -156,18 +161,16 @@ graph TB
 
 ```mermaid
 graph TD
-    A["Initial Message"] --> |Task Prompt| B["HumanMessage"]
-    B --> C["Agent Loop - Step 1"]
-    C --> D["LLM Response<br/>may have tool_calls"]
-    D --> E["AIMessage"]
-    E --> F["Tool Execution"]
-    F --> G["ToolMessage<br/>with result"]
-    G --> H["Agent Loop - Step 2"]
-    H --> D
+    A["Initial Instructions (HumanMessage)"] --> B["State Summary (SystemMessage)<br/>Index 1 - Updated dynamically"]
+    B --> C["Agent Loop Step"]
+    C --> D["LLM Response (AIMessage)<br/>includes <scratchpad> JSON block"]
+    D --> E["Tool Execution"]
+    E --> F["Tool Outputs (ToolMessage)<br/>Last 2 fully intact, older ones pruned"]
+    F --> C
     
-    style B fill:#c3fae8
-    style E fill:#ffd43b
-    style G fill:#a5d8ff
+    style A fill:#c3fae8
+    style B fill:#ffd43b
+    style D fill:#a5d8ff
 ```
 
 ## LLM Provider Configuration
@@ -197,8 +200,8 @@ graph TD
 ## Code Structure
 
 ```
-agent_demo.py
-├── Imports
+naukri_agent_demo.py / indeed_agent_demo.py
+├── Imports (SystemMessage, update_agent_memory)
 ├── invoke_model_with_retry()
 │   ├── Loop: max_retries times
 │   ├── Try: Call model.invoke()
@@ -209,24 +212,17 @@ agent_demo.py
 │   ├── Load .env
 │   ├── Determine LLM provider
 │   ├── Initialize LLM
-│   ├── Import browser tools
-│   ├── Create tool list
 │   ├── Bind tools to LLM
-│   ├── Create initial message
-│   ├── Initialize tracking variables
-│   ├── Agent loop (max 10 steps)
+│   ├── Initialize state_summary & message history
+│   ├── Agent loop (max 35 steps)
+│   │   ├── Update Agent Memory (prunes old tool outputs & updates state summary)
 │   │   ├── Invoke LLM with retry
 │   │   ├── Log LLM tokens
 │   │   ├── Check for tool calls
-│   │   ├── For each tool call:
-│   │   │   ├── Count input tokens
-│   │   │   ├── Execute tool
-│   │   │   ├── Count output tokens
-│   │   │   └── Log tool tokens
-│   │   └── Add tool results to messages
-│   ├── Print final answer
-│   └── Print token summary
-└── Main execution (if __name__ == "__main__")
+│   │   └── For each tool call:
+│   │       ├── Count tokens & execute tool
+│   │       └── Add tool results to messages
+│   └── Print final answer & token summary
 ```
 
 ## Token Counting Strategy
@@ -365,22 +361,22 @@ Step 7: Final Answer
 
 ## Reasoning Behind Design Choices
 
-1. **Exponential Backoff**: Respects API rate limits, increases wait time each attempt
-2. **Token Tracking**: Monitors cost per tool and per LLM call for optimization
-3. **Retry Logic**: Handles transient failures without failing entire workflow
-4. **Step Limit**: Prevents infinite loops (max 10 steps)
-5. **Message History**: LLM sees full context of previous interactions
-6. **Tool Binding**: Leverages LangChain's built-in tool calling mechanism
-7. **Error Isolation**: Tool errors don't crash agent, LLM sees errors and adapts
-8. **Provider Flexibility**: Supports multiple LLM providers (Gemini, DeepSeek)
+1. **Exponential Backoff**: Respects API rate limits, increases wait time each attempt.
+2. **Token Tracking**: Monitors cost per tool and per LLM call for optimization.
+3. **Stateful Scratchpad**: Replaces verbose message history with a single dynamically updated SystemMessage tracking goals, data, and steps.
+4. **Tool Output Pruning**: Keeps only the last 2 steps of tool results intact, avoiding context limits and reducing token costs.
+5. **Step Limit**: Set at a generous max 35 steps to allow thorough workflows.
+6. **Tool Binding**: Leverages LangChain's built-in tool calling mechanism.
+7. **Error Isolation**: Tool errors don't crash the agent; the LLM sees the error message and adapts.
+8. **Provider Flexibility**: Supports multiple LLM providers (Gemini, DeepSeek).
 
 ## Token Efficiency Tips
 
-1. **Early Tool Specialization**: Use `naukri_job_fetch()` instead of `get_page_text()` for job pages
-2. **Accessibility Mode**: Request "interactive" accessibility tree instead of "all"
-3. **Targeted Extraction**: Get specific form fields instead of full page text
-4. **Batch Operations**: Perform multiple actions per tool call when possible
-5. **Result Truncation**: `get_page_text()` returns max 3000 chars, not unlimited
+1. **Memory Pruning**: Automatically prunes older, massive tool outputs (like DOM accessibility trees) to keep context tokens minimal.
+2. **Stateful Scratchpad**: Restores context summary without needing the model to re-analyze historical turns.
+3. **Early Tool Specialization**: Use `naukri_job_fetch()` instead of `get_page_text()` for job listings.
+4. **Accessibility Mode**: Employs structural accessibility trees for 80%+ reduction in page data size.
+5. **Batch Operations**: Uses `fill_entire_form` to fill forms in one call instead of field-by-field.
 
 ## Integration Points
 

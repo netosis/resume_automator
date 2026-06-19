@@ -5,7 +5,8 @@ import time
 import random
 from pathlib import Path
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, SystemMessage
+import async_logger
 
 # Ensure parent and current directories are on path to allow imports
 sys.path.append(str(Path(__file__).parent.resolve()))
@@ -27,7 +28,8 @@ from browser_tools import (
     PersistentBrowserManager,
     get_compressed_dom,
     save_chat_transcript,
-    fill_entire_form
+    fill_entire_form,
+    update_agent_memory
 )
 
 # Configure Stream Encoding for Windows
@@ -170,7 +172,9 @@ def analyze_page_layout_screenshot(page) -> str:
             caller_name="Screenshot Layout Analysis",
             model_name=model_name,
             input_tokens=llm_in,
-            output_tokens=llm_out
+            output_tokens=llm_out,
+            sent_data=prompt_text,
+            response_data=response.content
         )
     except Exception as e:
         print(f"[Workday Agent Warning] Failed to log unified API call: {e}")
@@ -313,10 +317,38 @@ def run_workday_agent(resume_path: str, target_url: str = None):
         "5. Final Review & Keep Browser Open:\n"
         "   - Keep progressing until you reach the final 'Review' or confirmation screen.\n"
         "   - Once the review page is reached or you have successfully filled all fields, stop execution.\n"
-        "   - DO NOT close the browser context. Keep the browser open so the final submission can be inspected.\n"
+        "   - DO NOT close the browser context. Keep the browser open so the final submission can be inspected.\n\n"
+        "### STATEFUL SCRATCHPAD INSTRUCTIONS:\n"
+        "To optimize memory, you must maintain a running 'State Summary / Scratchpad'. "
+        "In every response, you MUST include a `<scratchpad>` XML block containing a JSON object summarizing your current state. "
+        "The JSON object must follow this structure:\n"
+        "{\n"
+        "  \"completed_steps\": [\"Brief description of step 1\", \"Brief description of step 2\"],\n"
+        "  \"extracted_data\": {\"key1\": \"value1\", \"key2\": \"value2\"},\n"
+        "  \"next_immediate_step\": \"What you plan to do next\"\n"
+        "}\n"
+        "Example format in your output:\n"
+        "<scratchpad>\n"
+        "{\n"
+        "  \"completed_steps\": [\"Opened workday portal\", \"Uploaded resume\"],\n"
+        "  \"extracted_data\": {\"candidate_name\": \"John Doe\"},\n"
+        "  \"next_immediate_step\": \"Fill out work experience page\"\n"
+        "}\n"
+        "</scratchpad>\n"
+        "Do not omit this block from your response! Always output it."
     )
 
-    messages = [HumanMessage(content=prompt)]
+    state_summary = {
+        "completed_steps": [],
+        "extracted_data": {},
+        "next_immediate_step": ""
+    }
+
+    import json
+    messages = [
+        HumanMessage(content=prompt),
+        SystemMessage(content=f"### CURRENT AGENT STATE SUMMARY:\n{json.dumps(state_summary, indent=2)}")
+    ]
     
     llm_token_logs = []
     tool_token_logs = []
@@ -331,6 +363,7 @@ def run_workday_agent(resume_path: str, target_url: str = None):
 
     try:
         max_steps = 30
+        last_response_content = None
         for step in range(max_steps):
             # Check if the page state has changed to perform screenshot layout analysis
             state_changed = False
@@ -364,6 +397,9 @@ def run_workday_agent(resume_path: str, target_url: str = None):
                 except Exception as e:
                     print(f"[Workday Agent Warning] Layout analysis failed: {e}")
 
+            # Update memory state (pruning and scratchpad maintenance)
+            update_agent_memory(messages, state_summary, last_response_content, keep_last_n_tool_outputs=2)
+
             print(f"[Workday Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
             try:
                 response = invoke_model_with_retry(model_with_tools, messages)
@@ -372,6 +408,7 @@ def run_workday_agent(resume_path: str, target_url: str = None):
                 break
                 
             messages.append(response)
+            last_response_content = response.content
             save_chat_transcript("workday", messages, session_id)
 
             llm_in = 0
@@ -384,13 +421,26 @@ def run_workday_agent(resume_path: str, target_url: str = None):
             
             # Log to the unified session log file
             try:
+                sent_msgs = [{"role": type(m).__name__, "content": m.content} for m in messages[:-1]]
                 from browser_tools import log_api_call
-                log_api_call(
-                    caller_name="Workday Agent Loop",
-                    model_name=model_name,
-                    input_tokens=llm_in,
-                    output_tokens=llm_out
-                )
+                if response.tool_calls:
+                    log_api_call(
+                        caller_name="Workday Agent API Call (requested tools)",
+                        model_name=model_name,
+                        input_tokens=llm_in,
+                        output_tokens=llm_out,
+                        sent_data={"messages": sent_msgs},
+                        response_data={"content": response.content, "tool_calls": response.tool_calls}
+                    )
+                else:
+                    log_api_call(
+                        caller_name="Workday Agent API Call (final)",
+                        model_name=model_name,
+                        input_tokens=llm_in,
+                        output_tokens=llm_out,
+                        sent_data={"messages": sent_msgs},
+                        response_data={"content": response.content}
+                    )
             except Exception as e:
                 print(f"[Workday Agent Warning] Failed to log unified API call: {e}")
 
@@ -442,6 +492,20 @@ def run_workday_agent(resume_path: str, target_url: str = None):
                         print(f"[Tool Response]: {result_str[:400]}... [truncated for display]")
                         print(f"[Token Usage]: Tool '{tool_name}' consumed: {input_tokens} (input) + {output_tokens} (output) tokens\n")
                         
+                        # Log tool execution to unified session log
+                        try:
+                            from browser_tools import log_api_call
+                            log_api_call(
+                                caller_name=f"Tool Execute: {tool_name}",
+                                model_name="tool_local",
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                sent_data=tool_args,
+                                response_data=result_str
+                            )
+                        except Exception as le:
+                            print(f"[Workday Agent Warning] Failed to log tool execution: {le}")
+
                         tool_token_logs.append({
                             "step": step + 1,
                             "tool_name": tool_name,
@@ -459,6 +523,21 @@ def run_workday_agent(resume_path: str, target_url: str = None):
                         error_msg = f"Error running tool '{tool_name}': {str(e)}"
                         error_tokens = model.get_num_tokens(error_msg)
                         print(f"[Tool Error]: {error_msg}")
+                        
+                        # Log tool execution error to unified session log
+                        try:
+                            from browser_tools import log_api_call
+                            log_api_call(
+                                caller_name=f"Tool Execute: {tool_name} (FAILED)",
+                                model_name="tool_local",
+                                input_tokens=input_tokens,
+                                output_tokens=error_tokens,
+                                sent_data=tool_args,
+                                response_data=error_msg
+                            )
+                        except Exception as le:
+                            print(f"[Workday Agent Warning] Failed to log tool execution failure: {le}")
+
                         tool_token_logs.append({
                             "step": step + 1,
                             "tool_name": tool_name,
@@ -476,6 +555,21 @@ def run_workday_agent(resume_path: str, target_url: str = None):
                     error_msg = f"Tool '{tool_name}' is not registered."
                     error_tokens = model.get_num_tokens(error_msg)
                     print(f"[Tool Error]: {error_msg}")
+                    
+                    # Log unregistered tool execution to unified session log
+                    try:
+                        from browser_tools import log_api_call
+                        log_api_call(
+                            caller_name=f"Tool Execute: {tool_name} (UNREGISTERED)",
+                            model_name="tool_local",
+                            input_tokens=input_tokens,
+                            output_tokens=error_tokens,
+                            sent_data=tool_args,
+                            response_data=error_msg
+                        )
+                    except Exception as le:
+                        print(f"[Workday Agent Warning] Failed to log unregistered tool error: {le}")
+
                     tool_token_logs.append({
                         "step": step + 1,
                         "tool_name": tool_name,
@@ -488,6 +582,7 @@ def run_workday_agent(resume_path: str, target_url: str = None):
                     total_tool_output += error_tokens
                     messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
                     save_chat_transcript("workday", messages, session_id)
+
         else:
             print("[Workday Agent Warning]: Reached maximum steps without completion.")
     except KeyboardInterrupt:
