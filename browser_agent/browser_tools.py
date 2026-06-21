@@ -738,7 +738,7 @@ def get_representation_header_and_body(page: Page, mode: str) -> tuple:
         return f"Accessibility Tree ({mode} mode)", a11y_info
 
 @tool
-def get_compressed_dom(mode: str = "interactive") -> Union[str, bool]:
+def get_compressed_dom(mode: str = "interactive", tool_summary: str = "") -> Union[str, bool]:
     """
     Retrieves a compressed, token-efficient DOM representation of the currently active page.
     mode: Can be 'interactive' (buttons, links, inputs), 'reading' (headings, paragraphs, text elements), or 'full'.
@@ -756,7 +756,7 @@ def get_compressed_dom(mode: str = "interactive") -> Union[str, bool]:
 # LangChain Tools definitions
 
 @tool
-def open_website(url: str, mode: str = "interactive") -> str:
+def open_website(url: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Launches the configured browser (if not already open) and navigates to the specified URL.
     Use this to open job boards like naukri.com, glassdoor.com, linkedin.com, or general links.
@@ -789,7 +789,7 @@ def open_website(url: str, mode: str = "interactive") -> str:
 
 
 @tool
-def get_page_text() -> str:
+def get_page_text(tool_summary: str = "") -> str:
     """
     Extracts and returns the text content of the currently active web page.
     Use this to read job descriptions, search results, or profile data from the page.
@@ -813,7 +813,7 @@ def get_page_text() -> str:
 
 
 @tool
-def click_on_element(selector: str, mode: str = "interactive") -> str:
+def click_on_element(selector: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Clicks on a web element using a CSS selector or text pattern (e.g., 'button.search', 'text=Apply Now').
     Use this to interact with buttons, search buttons, links, or checkmarks.
@@ -865,7 +865,7 @@ def click_on_element(selector: str, mode: str = "interactive") -> str:
 
 
 @tool
-def input_text_into_element(selector: str, text: str, mode: str = "interactive") -> str:
+def input_text_into_element(selector: str, text: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Inputs/types text into a web input field matching the CSS selector (e.g., 'input[name="q"]', 'input#search-box').
     Use this to fill in search terms, search boxes, usernames, or application details.
@@ -897,7 +897,7 @@ def input_text_into_element(selector: str, text: str, mode: str = "interactive")
 
 
 @tool
-def scroll_page(direction: str, mode: str = "interactive") -> str:
+def scroll_page(direction: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Scrolls the page 'down' or 'up' to trigger loading of dynamic content (like continuous scrolling on LinkedIn or Naukri).
     direction: Must be either 'down' or 'up'.
@@ -930,7 +930,7 @@ def scroll_page(direction: str, mode: str = "interactive") -> str:
 
 
 @tool
-def get_interactable_buttons() -> str:
+def get_interactable_buttons(tool_summary: str = "") -> str:
     """
     Scans the current page for visible, interactable buttons and clickable elements.
     Uses the already created accessibility_tree.json. If the file is not present,
@@ -988,7 +988,7 @@ def get_interactable_buttons() -> str:
 
 
 @tool
-def get_accessibility_tree(mode: str = "interactive") -> Union[str, bool]:
+def get_accessibility_tree(mode: str = "interactive", tool_summary: str = "") -> Union[str, bool]:
     """
     Retrieves the accessibility tree of the currently active page.
     mode: Can be 'interactive' (buttons, links, textboxes), 'reading' (headings, text), or 'full'.
@@ -1004,7 +1004,7 @@ def get_accessibility_tree(mode: str = "interactive") -> Union[str, bool]:
 
 
 @tool
-def fetch_job_details() -> str:
+def fetch_job_details(tool_summary: str = "") -> str:
     """
     Retrieves key details from the currently open job page using general body text extraction (truncated to 3000 characters).
     """
@@ -1033,7 +1033,7 @@ def fetch_job_details() -> str:
 
 
 @tool
-def click_apply_button(mode: str = "interactive") -> str:
+def click_apply_button(mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Searches the current page for visible 'Apply', 'Apply on Company Site', 'Apply with Indeed',
     'Submit your application', 'Continue', 'Next', or similar buttons/links and clicks them.
@@ -1095,7 +1095,7 @@ def click_apply_button(mode: str = "interactive") -> str:
 
 
 @tool
-def get_form_fields() -> str:
+def get_form_fields(tool_summary: str = "") -> str:
     """
     Scans the current page and extracts details about all form fields (inputs, select dropdowns, textareas, checkboxes, radio buttons, file inputs).
     Returns a structured text description of the fields including their labels, IDs, types, values, and options.
@@ -1139,7 +1139,7 @@ def get_form_fields() -> str:
 
 
 @tool
-def select_dropdown_option(selector: str, option_value_or_text: str, mode: str = "interactive") -> str:
+def select_dropdown_option(selector: str, option_value_or_text: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Selects an option from a drop-down (<select>) element matching the CSS selector.
     The option can be selected by its value attribute or visible text.
@@ -1176,7 +1176,7 @@ def select_dropdown_option(selector: str, option_value_or_text: str, mode: str =
 
 
 @tool
-def set_checkbox_state(selector: str, checked: bool, mode: str = "interactive") -> str:
+def set_checkbox_state(selector: str, checked: bool, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Checks or unchecks a checkbox or radio button element matching the CSS selector.
     checked: True to check / select, False to uncheck / deselect.
@@ -1207,7 +1207,7 @@ def set_checkbox_state(selector: str, checked: bool, mode: str = "interactive") 
 
 
 @tool
-def upload_file(selector: str, file_path: str, mode: str = "interactive") -> str:
+def upload_file(selector: str, file_path: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Uploads a local file to a file input element matching the CSS selector.
     file_path: Absolute or relative path to the file to upload.
@@ -1274,7 +1274,7 @@ def _evaluate_field_heuristics(field: dict) -> Optional[Union[str, bool]]:
 
 
 @tool
-def generate_fill_values(fields_json: str) -> str:
+def generate_fill_values(fields_json: str, tool_summary: str = "") -> str:
     """
     Given a list or string of form fields (with labels, selectors, types), analyzes them and generates mock details to fill.
     It returns a JSON dictionary mapping selectors or field names to their target values.
@@ -1403,7 +1403,7 @@ def _handle_form_file(locator, value, page) -> str:
 
 
 @tool
-def fill_entire_form(fields_data_json: str, mode: str = "interactive") -> str:
+def fill_entire_form(fields_data_json: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Fills out multiple form fields on the current page at once using Playwright.
     fields_data_json: A JSON string containing a list of objects representing fields to fill.
@@ -1494,7 +1494,7 @@ def fill_entire_form(fields_data_json: str, mode: str = "interactive") -> str:
 
 
 @tool
-def select_custom_combobox_option(selector: str, option_text: str, mode: str = "interactive") -> str:
+def select_custom_combobox_option(selector: str, option_text: str, mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Selects an option from a custom combobox/dropdown button (like Workday's dropdowns)
     which is not a standard HTML <select> element.
@@ -1561,7 +1561,7 @@ def select_custom_combobox_option(selector: str, option_text: str, mode: str = "
 
 
 @tool
-def close_current_tab() -> str:
+def close_current_tab(tool_summary: str = "") -> str:
     """
     Closes the currently active browser tab and switches to the last remaining open tab.
     Use this when a new tab was opened (e.g., after clicking a link or Apply) and you are done with it.
@@ -1602,7 +1602,7 @@ def close_current_tab() -> str:
 
 
 @tool
-def go_back(mode: str = "interactive") -> str:
+def go_back(mode: str = "interactive", tool_summary: str = "") -> str:
     """
     Navigates the current page back one step in history.
     Returns confirmation, current URL, and the updated pruned accessibility tree of the page.
@@ -1623,7 +1623,7 @@ def go_back(mode: str = "interactive") -> str:
 
 
 @tool
-def close_browser_session() -> str:
+def close_browser_session(tool_summary: str = "") -> str:
     """
     Closes the active Browser window and stops the automation session.
     Call this when the browsing task is completely done.

@@ -5,6 +5,7 @@ import random
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, SystemMessage
 import async_logger
+import copy
 
 # Reconfigure stdout/stderr to UTF-8 on Windows to avoid cp1252/charmap print crashes
 if sys.platform.startswith("win"):
@@ -288,7 +289,8 @@ def run_browser_agent(prompt: str):
         SystemMessage(content=f"### CURRENT AGENT STATE SUMMARY:\n{json.dumps(state_summary, indent=2)}")
     ]
 
-    _TOKEN_TRACKER["messages"] = messages
+    full_messages = [copy.deepcopy(msg) for msg in messages]
+    _TOKEN_TRACKER["messages"] = full_messages
     manager = PersistentBrowserManager.get_instance()
     session_id = getattr(manager, "session_id", time.strftime("%Y%m%d_%H%M%S"))
 
@@ -298,6 +300,13 @@ def run_browser_agent(prompt: str):
         # Update memory state (pruning and scratchpad maintenance)
         update_agent_memory(messages, state_summary, last_response_content, keep_last_n_tool_outputs=2)
         
+        # Sync updated state summary SystemMessage into full_messages
+        scratchpad_content = f"### CURRENT AGENT STATE SUMMARY:\n{json.dumps(state_summary, indent=2)}"
+        for idx, msg in enumerate(full_messages):
+            if isinstance(msg, SystemMessage) and msg.content.startswith("### CURRENT AGENT STATE SUMMARY:"):
+                full_messages[idx] = copy.deepcopy(SystemMessage(content=scratchpad_content))
+                break
+
         print(f"[Agent Step {step + 1}] Invoking LLM ({provider.upper()})...")
         try:
             response = invoke_model_with_retry(model_with_tools, messages)
@@ -305,8 +314,9 @@ def run_browser_agent(prompt: str):
             print(f"\n[Agent Error]: API call failed after retries. Error: {e}")
             break
         messages.append(response)
+        full_messages.append(copy.deepcopy(response))
         last_response_content = response.content
-        save_chat_transcript("indeed", messages, session_id)
+        save_chat_transcript("indeed", full_messages, session_id)
 
         # Log LLM token usage if available
         llm_in = 0
@@ -426,8 +436,10 @@ def run_browser_agent(prompt: str):
                     _TOKEN_TRACKER["total_tool_output"] = total_tool_output
                     _TOKEN_TRACKER["tool_token_logs"] = tool_token_logs
                     
-                    messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
-                    save_chat_transcript("indeed", messages, session_id)
+                    tool_msg = ToolMessage(content=result_str, tool_call_id=tool_id)
+                    messages.append(tool_msg)
+                    full_messages.append(copy.deepcopy(tool_msg))
+                    save_chat_transcript("indeed", full_messages, session_id)
                 except Exception as e:
                     error_msg = f"Error running tool '{tool_name}': {str(e)}"
                     error_tokens = model.get_num_tokens(error_msg)
@@ -464,8 +476,10 @@ def run_browser_agent(prompt: str):
                     _TOKEN_TRACKER["total_tool_output"] = total_tool_output
                     _TOKEN_TRACKER["tool_token_logs"] = tool_token_logs
                     
-                    messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
-                    save_chat_transcript("indeed", messages, session_id)
+                    tool_msg = ToolMessage(content=error_msg, tool_call_id=tool_id)
+                    messages.append(tool_msg)
+                    full_messages.append(copy.deepcopy(tool_msg))
+                    save_chat_transcript("indeed", full_messages, session_id)
             else:
                 error_msg = f"Tool '{tool_name}' is not registered."
                 error_tokens = model.get_num_tokens(error_msg)
@@ -501,8 +515,10 @@ def run_browser_agent(prompt: str):
                 _TOKEN_TRACKER["total_tool_output"] = total_tool_output
                 _TOKEN_TRACKER["tool_token_logs"] = tool_token_logs
                 
-                messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
-                save_chat_transcript("indeed", messages, session_id)
+                tool_msg = ToolMessage(content=error_msg, tool_call_id=tool_id)
+                messages.append(tool_msg)
+                full_messages.append(copy.deepcopy(tool_msg))
+                save_chat_transcript("indeed", full_messages, session_id)
     else:
         print("[Agent Warning]: Reached maximum steps without formal completion.")
 

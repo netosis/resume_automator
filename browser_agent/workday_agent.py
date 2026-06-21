@@ -203,6 +203,72 @@ def analyze_page_layout_screenshot(page) -> str:
     return response.content
 
 
+def handle_workday_how_did_you_hear_about_us(page) -> bool:
+    """
+    Programmatically selects 'Job Board > Naukri' for 'How Did You Hear About Us?' question
+    without invoking the LLM model.
+    """
+    try:
+        # Check if the question label is present on the page
+        has_question = page.locator("text=/How Did You Hear About Us/i").first.is_visible()
+        if not has_question:
+            return False
+            
+        # We search for data-automation-id="multiSelectContainer"
+        multiselect = page.locator('[data-automation-id="multiSelectContainer"]').first
+        if not multiselect.is_visible():
+            return False
+            
+        # Check if "Naukri" is already selected to avoid re-clicking
+        selected_text = multiselect.inner_text()
+        if "Naukri" in selected_text:
+            return False
+            
+        print("[Workday Programmatic] 'How Did You Hear About Us?' field with multiSelectContainer detected.")
+        
+        # Step 1: Click on the multiSelectContainer element
+        print("[Workday Programmatic] Clicking multiSelectContainer...")
+        multiselect.scroll_into_view_if_needed()
+        multiselect.click()
+        
+        # Step 2: Wait for about 2 seconds
+        page.wait_for_timeout(2000)
+        
+        # Step 3: Search for promptLeafNode elements
+        prompt_leaves = page.locator('[data-automation-id="promptLeafNode"], .promptLeafNode, promptLeafNode')
+        
+        # Step 4: Within these elements, search for data-automation-id="promptOption" and data-automation-label="Job Board"
+        job_board_option = prompt_leaves.locator('[data-automation-id="promptOption"][data-automation-label="Job Board"]').first
+        if not job_board_option.is_visible():
+            job_board_option = prompt_leaves.locator('[data-automation-label="Job Board"]').first
+        if not job_board_option.is_visible():
+            job_board_option = prompt_leaves.locator("text=/Job Board/i").first
+            
+        if job_board_option.is_visible():
+            print("[Workday Programmatic] Found 'Job Board' option. Clicking it...")
+            job_board_option.click()
+            page.wait_for_timeout(1000) # Wait a moment for children to load
+            
+            # Step 5: Search for "Naukri" within the loaded elements and click
+            naukri_option = page.locator("text=/Naukri/i").first
+            if not naukri_option.is_visible():
+                naukri_option = page.locator('[data-automation-id="promptOption"]').filter(has_text="Naukri").first
+            
+            if naukri_option.is_visible():
+                print("[Workday Programmatic] Found 'Naukri' option. Clicking it...")
+                naukri_option.click()
+                page.wait_for_timeout(1000)
+                print("[Workday Programmatic] Successfully selected 'Naukri' under 'Job Board'.")
+                return True
+            else:
+                print("[Workday Programmatic] Warning: 'Naukri' option not found in loaded elements.")
+        else:
+            print("[Workday Programmatic] Warning: 'Job Board' option not found within promptLeafNodes.")
+    except Exception as e:
+        print(f"[Workday Programmatic Error] Failed to handle 'How Did You Hear About Us' dropdown: {e}")
+    return False
+
+
 def run_workday_agent(resume_path: str, target_url: str = None):
     """
     Runs the Workday Form Applier Agent.
@@ -364,7 +430,16 @@ def run_workday_agent(resume_path: str, target_url: str = None):
     try:
         max_steps = 30
         last_response_content = None
+        previous_page_state = ""
         for step in range(max_steps):
+            # Programmatically handle "How Did You Hear About Us?" Workday question if present
+            try:
+                manager = PersistentBrowserManager.get_instance()
+                if manager.page and not manager.page.is_closed():
+                    handle_workday_how_did_you_hear_about_us(manager.page)
+            except Exception as e:
+                print(f"[Workday Agent Warning] Programmatic dropdown check failed: {e}")
+
             # Check if the page state has changed to perform screenshot layout analysis
             state_changed = False
             try:

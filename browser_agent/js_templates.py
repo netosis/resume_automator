@@ -442,7 +442,13 @@ NAUKRI_JOB_STATUS_CHECK_JS = r'''
 # Used in naukri_tools.py
 DETECT_NAUKRI_POPUP_JS = r'''
 () => {
-    const inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']");
+    let inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer'], input[placeholder*='Type your response'], textarea[placeholder*='Type your response'], input[placeholder*='answer'], textarea[placeholder*='answer'], input[placeholder*='message'], textarea[placeholder*='message']");
+    if (!inputEl) {
+        const modalContainer = document.querySelector("div[class*='modal'], div[class*='dialog'], div[class*='drawer'], div[class*='popup'], [class*='chatbot'], [class*='botItem']");
+        if (modalContainer) {
+            inputEl = modalContainer.querySelector("input[type='text'], textarea");
+        }
+    }
     if (!inputEl) {
         return { detected: false };
     }
@@ -495,7 +501,13 @@ DETECT_NAUKRI_POPUP_JS = r'''
 
 GET_NEXT_NAUKRI_POPUP_QUESTION_JS = r'''
 () => {
-    const inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer']");
+    let inputEl = document.querySelector("input[placeholder*='Type message'], textarea[placeholder*='Type message'], input[placeholder*='Type your answer'], textarea[placeholder*='Type your answer'], input[placeholder*='Type your response'], textarea[placeholder*='Type your response'], input[placeholder*='answer'], textarea[placeholder*='answer'], input[placeholder*='message'], textarea[placeholder*='message']");
+    if (!inputEl) {
+        const modalContainer = document.querySelector("div[class*='modal'], div[class*='dialog'], div[class*='drawer'], div[class*='popup'], [class*='chatbot'], [class*='botItem']");
+        if (modalContainer) {
+            inputEl = modalContainer.querySelector("input[type='text'], textarea");
+        }
+    }
     if (!inputEl) {
         return null;
     }
@@ -750,4 +762,37 @@ FIND_INDEED_APPLY_BUTTON_JS = r'''
 }
 '''
 
-
+GET_ELEMENTS_WITH_COORDINATES_JS = r'''
+() => {
+    const results = [];
+    const selectors = [
+        'input', 'textarea', 'button', 'a', '[role="button"]', 
+        '.chatbot_InputContainer', '._chatBotContainer', '.chatbot_MessageContainer',
+        '.botMsg', '.msg'
+    ];
+    const seen = new Set();
+    
+    for (const sel of selectors) {
+        const elements = document.querySelectorAll(sel);
+        for (const el of elements) {
+            if (seen.has(el)) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+                seen.add(el);
+                results.push({
+                    tagName: el.tagName.toLowerCase(),
+                    className: el.className || "",
+                    text: el.innerText ? el.innerText.substring(0, 150).trim() : "",
+                    placeholder: el.placeholder || el.getAttribute('placeholder') || "",
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2,
+                    width: rect.width,
+                    height: rect.height,
+                    selector: sel
+                });
+            }
+        }
+    }
+    return results;
+}
+'''
