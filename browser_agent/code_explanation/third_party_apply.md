@@ -17,30 +17,69 @@ flowchart TD
     
     ReturnResumePath --> CallAgent[Call run_apply_agent]
     
-    subgraph ApplyAgent[run_apply_agent Loop]
-        CallAgent --> ResolveLLM[Determine provider & load API keys]
-        ResolveLLM --> InitLLM[Initialize model: ChatDeepSeek or ChatGoogleGenerativeAI]
-        InitLLM --> BindTools[Bind application tools list to model]
+    subgraph ApplyAgent[run_apply_agent Flow]
+        CallAgent --> CheckWorkday{Is Workday URL?}
+        CheckWorkday -->|Yes| HandoffWorkday[Handoff to workday_agent]
+        HandoffWorkday --> End
+        CheckWorkday -->|No| LoadLLM[Load LLM Provider & Keys]
         
-        BindTools --> BuildPrompt[Construct specialized job application prompt:<br/>1. Open target URL<br/>2. Click Apply Now/Apply button<br/>3. Call get_form_fields to scan inputs<br/>4. Fill form inputs with static candidate details<br/>5. Upload dummy resume<br/>6. Check privacy policy checkboxes<br/>7. Submit form]
+        LoadLLM --> NavigateTarget[Open Page & Take Initial Screenshot]
+        NavigateTarget --> CheckCaptcha1{Captcha Detected?}
+        CheckCaptcha1 -->|Yes| SaveManual[Log to manual_applications.txt & Exit]
         
-        BuildPrompt --> StartLoop[Start Step Loop: 1 to 15]
-        StartLoop --> InvokeModel[Invoke LLM with retry backoff]
-        InvokeModel --> CheckToolCalls{Does response contain<br/>tool calls?}
+        CheckCaptcha1 -->|No| FindApply[Search Apply Buttons via Regex]
+        FindApply --> ApplyCheck{Buttons Found?}
+        ApplyCheck -->|No| VisionFallback[vision_find_apply_button_text]
+        VisionFallback --> VisionCheck{Text Identified?}
+        VisionCheck -->|No| SaveManual
+        VisionCheck -->|Yes| ClickApplyBtn[Click identified element]
+        ApplyCheck -->|Yes| ClickApplyBtn
         
-        CheckToolCalls -->|No| SuccessExit[Stop: Application completed]
-        CheckToolCalls -->|Yes| ExecuteTools[Execute proposed browser tool calls]
-        ExecuteTools --> AppendResponses[Append tool results to message history]
-        AppendResponses --> NextStep{Remaining step<br/>count > 0?}
+        ClickApplyBtn --> LocalLoopStart[Start Local Form Filler Loop (up to 5 steps)]
         
-        NextStep -->|Yes| StartLoop
-        NextStep -->|No| MaxStepsExit[Stop: Reached step limit]
+        subgraph LocalFiller[Local Multi-Step Form Filler]
+            LocalLoopStart --> LocalCaptcha{Captcha Detected?}
+            LocalCaptcha -->|Yes| SaveManual
+            LocalCaptcha -->|No| GetFields[Evaluate GET_FORM_FIELDS_JS]
+            GetFields --> MapFields[map_fields_with_resume_data]
+            MapFields --> UnmappedCheck{Unmapped Fields?}
+            
+            UnmappedCheck -->|Yes| PartialFill[fill_mapped_fields_locally (partial)]
+            PartialFill --> HandoffLLM[Break loop -> Handoff to LLM Agent]
+            
+            UnmappedCheck -->|No| FullLocalFill[fill_mapped_fields_locally (full)]
+            FullLocalFill --> FindNext[Search Next/Submit Button]
+            FindNext --> NextCheck{Next Button Found?}
+            NextCheck -->|Yes| ClickNext[Click Next & Wait]
+            ClickNext --> LocalLoopStart
+            NextCheck -->|No| LocalSuccessCheck[Check if Successfully Applied]
+        end
+        
+        HandoffLLM --> SetupLLMAgent[Bind tools & Setup Stateful Scratchpad]
+        SetupLLMAgent --> LLMLoop[Start LLM Agent Loop: 1 to 15]
+        
+        subgraph LLM_Loop[LLM Fallback Agent]
+            LLMLoop --> AgentCaptcha{Captcha/Workday?}
+            AgentCaptcha -->|Yes| ExitAgent[Exit Loop]
+            AgentCaptcha -->|No| InvokeLLM[Invoke LLM with retry]
+            InvokeLLM --> ToolCallCheck{Tool Calls?}
+            ToolCallCheck -->|No| SuccessLLM[Stop: Application Complete]
+            ToolCallCheck -->|Yes| ExecTools[Execute Tools (adjust_spinner_value, etc)]
+            ExecTools --> AppendLLM[Append Results]
+            AppendLLM --> NextLLMStep{Steps Left?}
+            NextLLMStep -->|Yes| LLMLoop
+            NextLLMStep -->|No| MaxLLM[Stop: Max Steps]
+        end
     end
     
-    SuccessExit --> End([End])
-    MaxStepsExit --> End
+    SaveManual --> End([End])
+    LocalSuccessCheck --> End
+    ExitAgent --> End
+    SuccessLLM --> End
+    MaxLLM --> End
     
     style Start fill:#e1f5e1
     style End fill:#ffe1e1
     style SetupDummy fill:#e8f5e9
-    style ApplyAgent fill:#e3f2fd
+    style LocalFiller fill:#fff3e0
+    style LLM_Loop fill:#e3f2fd

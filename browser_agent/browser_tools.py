@@ -369,57 +369,26 @@ def clean_page_text(text: str) -> str:
     text = re.sub(r'\n+', '\n', text)
     return text.strip()
 
-_CURRENT_MOUSE_X = 960.0
-_CURRENT_MOUSE_Y = 540.0
-
-
-def move_mouse_to_coordinates(page: Page, target_x: float, target_y: float, steps: Optional[int] = None) -> None:
-    """
-    Moves the virtual mouse cursor slowly to target_x, target_y in steps with small timeouts,
-    making the cursor path visible on screen.
-    """
-    global _CURRENT_MOUSE_X, _CURRENT_MOUSE_Y
-    
-    if steps is None:
-        steps = random.randint(30, 50)
-        
-    start_x = _CURRENT_MOUSE_X
-    start_y = _CURRENT_MOUSE_Y
-    
-    for i in range(1, steps + 1):
-        t = i / steps
-        # Easing easeInOutCubic:
-        t_eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
-        
-        curr_x = start_x + (target_x - start_x) * t_eased
-        curr_y = start_y + (target_y - start_y) * t_eased
-        
-        try:
-            page.mouse.move(curr_x, curr_y)
-        except Exception:
-            pass
-        page.wait_for_timeout(random.randint(8, 15))
-        
-    _CURRENT_MOUSE_X = target_x
-    _CURRENT_MOUSE_Y = target_y
-
-
 def move_mouse_to_element_and_click(page: Page, locator) -> bool:
     """
     Moves the mouse cursor slowly from its current position to the center of the element,
-    then clicks it, making the action visible to the user.
+    then clicks it, making the action visible to the user via PyAutoGUI if available.
     """
     try:
-        locator.scroll_into_view_if_needed()
+        # Scroll the element to the center of the viewport to prevent sticky headers/footers from obscuring it
+        locator.evaluate("el => el.scrollIntoView({block: 'center', inline: 'center'})")
+        page.wait_for_timeout(300) # Give smooth scrolling a moment to settle
+
         box = locator.bounding_box()
         if box:
-            x = box['x'] + box['width'] / 2
-            y = box['y'] + box['height'] / 2
+            scroll_x = page.evaluate("window.scrollX")
+            scroll_y = page.evaluate("window.scrollY")
             
-            # Slow movement to target (x, y)
-            move_mouse_to_coordinates(page, x, y)
-            page.wait_for_timeout(random.randint(150, 300)) # Small delay at destination
-            page.mouse.click(x, y)
+            viewport_x = box['x'] + box['width'] / 2 - scroll_x
+            viewport_y = box['y'] + box['height'] / 2 - scroll_y
+            
+            # Slow movement to target (x, y) using PyAutoGUI logic
+            execute_human_pyautogui_action(page, "move_and_click", x=viewport_x, y=viewport_y)
             return True
         else:
             locator.click()
@@ -1579,7 +1548,6 @@ def close_current_tab(tool_summary: str = "") -> str:
         
         # Move mouse slowly to a simulated close area (e.g. x=900, y=0)
         try:
-            move_mouse_to_coordinates(current_page, 900.0, 0.0)
             current_page.wait_for_timeout(random.randint(150, 300))
         except Exception:
             pass
@@ -1707,4 +1675,163 @@ def update_agent_memory(messages, state_summary, response_content, keep_last_n_t
 
     prune_old_tool_messages(messages, keep_last_n_tool_outputs)
 
+
+import math
+
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = True
+    pyautogui.PAUSE = 0.01
+    _PYAUTOGUI_AVAILABLE = True
+except ImportError:
+    _PYAUTOGUI_AVAILABLE = False
+
+
+def execute_human_pyautogui_action(page: Page, action_type: str, **kwargs):
+    """
+    Executes a PyAutoGUI mouse, keyboard, or scroll action by converting Playwright viewport 
+    coordinates to absolute monitor coordinates, using a Bezier curve for human-like 
+    mouse movement, and realistic typing delays.
+    """
+    is_headless = os.environ.get("HEADLESS", "false").lower() == "true"
+    
+    if not _PYAUTOGUI_AVAILABLE or is_headless:
+        print(f"[PyAutoGUI] Library not available or browser is headless. Falling back to Playwright native interactions.")
+        if action_type == "move_and_click":
+            x = kwargs.get("x")
+            y = kwargs.get("y")
+            if x is not None and y is not None:
+                page_x = x + page.evaluate("window.scrollX")
+                page_y = y + page.evaluate("window.scrollY")
+                page.mouse.move(page_x, page_y)
+                page.mouse.click(page_x, page_y)
+        elif action_type == "type":
+            page.keyboard.type(kwargs.get("text", ""))
+        elif action_type == "press":
+            page.keyboard.press(kwargs.get("key", ""))
+        elif action_type == "scroll":
+            clicks = kwargs.get("scroll_amount", 0)
+            if clicks > 0:
+                page.mouse.wheel(0, -clicks * 10) # approximate scroll up
+            else:
+                page.mouse.wheel(0, -clicks * 10) # approximate scroll down
+        return
+
+    if action_type == "move_and_click":
+        viewport_x = kwargs.get("x")
+        viewport_y = kwargs.get("y")
+        
+        # Convert viewport coordinates to absolute monitor coordinates
+        coords = page.evaluate(f"""() => {{
+                    const dpr = window.devicePixelRatio || 1;
+                    const borderLeftWidth = window.outerWidth > window.innerWidth ? (window.outerWidth - window.innerWidth) / 2 : 0;
+                    const topChromeHeight = window.outerHeight > window.innerHeight ? (window.outerHeight - window.innerHeight) - borderLeftWidth : 0;
+
+                    const absoluteX = (window.screenX + borderLeftWidth + {viewport_x}) * dpr;
+                    const absoluteY = (window.screenY + topChromeHeight + {viewport_y}) * dpr;
+                    return [absoluteX, absoluteY, dpr];
+                }}""")
+        
+        if coords:
+            end_x, end_y, dpr = coords
+            # Run Bezier curve logic
+            start_x, start_y = pyautogui.position()
+            dx = end_x - start_x
+            dy = end_y - start_y
+            dist = math.hypot(dx, dy)
+            
+            if dist < 5:
+                pyautogui.moveTo(end_x, end_y)
+            else:
+                steps = max(20, min(100, int(dist / 8)))
+                p0 = (start_x, start_y)
+                p3 = (end_x, end_y)
+                
+                arc_magnitude = random.uniform(0.1, 0.3) * dist
+                arc_direction = 1 if random.random() > 0.5 else -1
+                
+                perp_x = -dy / dist * arc_magnitude * arc_direction
+                perp_y = dx / dist * arc_magnitude * arc_direction
+                
+                p1 = (
+                    start_x + dx * 0.3 + perp_x + random.uniform(-dist*0.1, dist*0.1),
+                    start_y + dy * 0.3 + perp_y + random.uniform(-dist*0.1, dist*0.1)
+                )
+                p2 = (
+                    start_x + dx * 0.7 + perp_x * random.uniform(0.5, 1.5) + random.uniform(-dist*0.1, dist*0.1),
+                    start_y + dy * 0.7 + perp_y * random.uniform(0.5, 1.5) + random.uniform(-dist*0.1, dist*0.1)
+                )
+
+                for i in range(1, steps + 1):
+                    t = i / steps
+                    t_eased = -(math.cos(math.pi * t) - 1) / 2
+                    u = 1 - t_eased
+                    x = (u**3 * p0[0] + 3 * u**2 * t_eased * p1[0] + 3 * u * t_eased**2 * p2[0] + t_eased**3 * p3[0])
+                    y = (u**3 * p0[1] + 3 * u**2 * t_eased * p1[1] + 3 * u * t_eased**2 * p2[1] + t_eased**3 * p3[1])
+                    
+                    jitter_factor = math.sin(math.pi * t)
+                    jitter_x = random.uniform(-2, 2) * jitter_factor
+                    jitter_y = random.uniform(-2, 2) * jitter_factor
+                    
+                    pyautogui.moveTo(int(x + jitter_x), int(y + jitter_y))
+                    time.sleep(random.uniform(0.005, 0.015))
+                
+                pyautogui.moveTo(end_x, end_y)
+                time.sleep(random.uniform(0.001, 0.003))
+            
+            # Use Playwright's native click at the exact page coordinates for 100% precision
+            # This ensures we never miss the button due to OS DPI/window border miscalculations,
+            # while still benefiting from the PyAutoGUI human-like mouse movement to evade detection!
+            page_x = viewport_x + page.evaluate("window.scrollX")
+            page_y = viewport_y + page.evaluate("window.scrollY")
+            page.mouse.click(page_x, page_y)
+            
+    elif action_type == "type":
+        text = kwargs.get("text", "")
+        for char in text:
+            pyautogui.write(char)
+            time.sleep(random.uniform(0.03, 0.1))
+            
+    elif action_type == "press":
+        key = kwargs.get("key", "")
+        key_map = {
+            "Enter": "enter",
+            "Backspace": "backspace",
+            "Tab": "tab",
+            "Control+A": "ctrl+a",
+            "Escape": "esc"
+        }
+        pyautogui_key = key_map.get(key, key.lower())
+        if "+" in pyautogui_key:
+            keys = pyautogui_key.split("+")
+            pyautogui.hotkey(*keys)
+        else:
+            pyautogui.press(pyautogui_key)
+        time.sleep(random.uniform(0.1, 0.3))
+        
+    elif action_type == "scroll":
+        clicks = kwargs.get("scroll_amount", 0)
+        pyautogui.scroll(clicks)
+        time.sleep(random.uniform(0.2, 0.4))
+
+
+@tool
+def os_level_mouse_keyboard_action(action_type: str, x: Optional[float] = None, y: Optional[float] = None, text: Optional[str] = None, key: Optional[str] = None, scroll_amount: Optional[int] = None, tool_summary: str = "") -> str:
+    """
+    Executes a PyAutoGUI OS-level mouse/keyboard action on the persistent browser.
+    Useful to bypass bot-detection using human-like Bezier curves.
+    'action_type' must be one of: 'move_and_click', 'type', 'press', 'scroll'.
+    If 'move_and_click', provide 'x' and 'y' (viewport coordinates).
+    If 'type', provide 'text'.
+    If 'press', provide 'key' (e.g. 'Enter').
+    If 'scroll', provide 'scroll_amount' (positive to scroll up, negative to scroll down).
+    """
+    try:
+        manager = PersistentBrowserManager.get_instance()
+        page = manager.get_page()
+        print(f"[Tool: os_level_mouse_keyboard_action] Executing {action_type} via PyAutoGUI")
+        execute_human_pyautogui_action(page, action_type, x=x, y=y, text=text, key=key, scroll_amount=scroll_amount)
+        return f"Successfully executed OS-level PyAutoGUI action: {action_type}"
+    except Exception as e:
+        return f"Failed to execute OS-level action. Error: {str(e)}"
 

@@ -58,7 +58,8 @@ from browser_tools import (
     save_chat_transcript,
     fill_entire_form,
     PersistentBrowserManager,
-    update_agent_memory
+    update_agent_memory,
+    os_level_mouse_keyboard_action
 )
 from indeed_tools import (
     search_indeed_via_url,
@@ -224,7 +225,8 @@ def run_browser_agent(prompt: str):
         fill_entire_form,
         search_indeed_via_url,
         indeed_job_fetch,
-        fetch_indeed_job_details
+        fetch_indeed_job_details,
+        os_level_mouse_keyboard_action
     ]
 
     # Bind tools to the model

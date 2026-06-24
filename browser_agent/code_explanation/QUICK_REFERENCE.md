@@ -57,6 +57,9 @@ set_checkbox_state(selector: str, checked: bool, mode: str = "interactive") -> s
 
 upload_file(selector: str, file_path: str, mode: str = "interactive") -> str
 # Uploads file to file input
+
+adjust_spinner_value(selector: str, target_value: int, increment_selector: str, decrement_selector: str, mode: str = "interactive") -> str
+# Adjusts a numeric spinner iteratively to target value
 ```
 
 ### Specialized (Naukri.com)

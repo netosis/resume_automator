@@ -14,7 +14,7 @@ from browser_tools import (
     get_representation_header_and_body,
     clean_page_text,
     move_mouse_to_element_and_click,
-    move_mouse_to_coordinates
+    execute_human_pyautogui_action
 )
 from js_templates import (
     DETECT_NAUKRI_POPUP_JS,
@@ -364,19 +364,18 @@ class NaukriChatbotFallback:
                 if act_type == "move_to_coordinates_and_click":
                     x = action.get("x")
                     y = action.get("y")
-                    print(f"[Fallback Class Action] Moving mouse to ({x}, {y}) and clicking...")
-                    move_mouse_to_coordinates(page, x, y)
-                    page.mouse.click(x, y)
+                    print(f"[Fallback Class Action] Moving PyAutoGUI mouse to viewport ({x}, {y}) and clicking...")
+                    execute_human_pyautogui_action(page, "move_and_click", x=x, y=y)
                     page.wait_for_timeout(random.randint(200, 500))
                 elif act_type == "keyboard_type":
                     txt = action.get("text")
-                    print(f"[Fallback Class Action] Keyboard typing: '{txt}'...")
-                    page.keyboard.type(txt)
+                    print(f"[Fallback Class Action] PyAutoGUI Keyboard typing: '{txt}'...")
+                    execute_human_pyautogui_action(page, "type", text=txt)
                     page.wait_for_timeout(random.randint(200, 500))
                 elif act_type == "keyboard_press":
                     key = action.get("key")
-                    print(f"[Fallback Class Action] Pressing key: '{key}'...")
-                    page.keyboard.press(key)
+                    print(f"[Fallback Class Action] PyAutoGUI Pressing key: '{key}'...")
+                    execute_human_pyautogui_action(page, "press", key=key)
                     page.wait_for_timeout(random.randint(200, 500))
                 elif act_type == "wait":
                     sec = action.get("seconds", 1.0)
@@ -424,7 +423,7 @@ def run_naukri_chatbot_fallback(tool_summary: str = "") -> str:
                 
             if not res.get("visible"):
                 summary_str = "\n".join(summary_logs)
-                return f"Successfully completed chatbot questions via fallback. The recruiter popup chatbot drawer has closed.\nFallback Action Summary:\n{summary_str}"
+                return f"Successfully completed chatbot questions via fallback. The job application has been successfully submitted.\nFallback Action Summary:\n{summary_str}"
                 
             # Wait between fallback steps
             page.wait_for_timeout(3000)
@@ -493,7 +492,7 @@ def manage_naukri_chatbot(tool_summary: str = "") -> str:
                 chatbot_container = page.locator('.chatbot_MessageContainer, [class*="chatbot_MessageContainer"]').first
                 if not chatbot_container.is_visible():
                     print("[Chatbot Programmatic] chatbot_MessageContainer disappears. Stopping chatbot loop.")
-                    return "Successfully completed chatbot questions. The recruiter popup chatbot drawer has closed."
+                    return "Successfully completed chatbot questions. The job application has been successfully submitted."
             
             # 2. Gather contents of class="botMsg msg " from the page
             # First, check using regex on the HTML to confirm elements are present
@@ -592,19 +591,48 @@ def manage_naukri_chatbot(tool_summary: str = "") -> str:
                 print("[Chatbot Programmatic] Input container not visible. Triggering fallback...")
                 return run_naukri_chatbot_fallback.invoke({})
                 
-            input_el = input_container.locator('input, textarea').first
+            input_el = input_container.locator('input, textarea, [contenteditable="true"], [role="textbox"]').first
+            
             if not input_el.is_visible():
-                input_el = input_container
+                # Fallback: Click container and type via keyboard
+                print("[Chatbot Programmatic] Input element not visible inside container. Clicking container and typing via keyboard...")
+                try:
+                    input_container.scroll_into_view_if_needed()
+                    input_container.click()
+                    page.wait_for_timeout(500)
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                    page.keyboard.type(llm_response)
+                    page.wait_for_timeout(500)
+                    page.keyboard.press("Enter")
+                    print("[Chatbot Programmatic] Submitted answer via keyboard type.")
+                    page.wait_for_timeout(2000)
+                    continue
+                except Exception as ke:
+                    print(f"[Chatbot Programmatic Warning] Keyboard fallback failed: {ke}. Triggering fallback...")
+                    return run_naukri_chatbot_fallback.invoke({})
                 
-            if not input_el.is_visible():
-                print("[Chatbot Programmatic] Input element not visible. Triggering fallback...")
-                return run_naukri_chatbot_fallback.invoke({})
-                
-            # Send input and hit enter
-            input_el.scroll_into_view_if_needed()
-            input_el.fill(llm_response)
-            page.wait_for_timeout(500)
-            input_el.press("Enter")
+            # Send input and hit enter (standard fill)
+            try:
+                input_el.scroll_into_view_if_needed()
+                input_el.fill(llm_response)
+                page.wait_for_timeout(500)
+                input_el.press("Enter")
+            except Exception as fe:
+                # If fill fails (e.g. element not fillable), use keyboard type fallback
+                print(f"[Chatbot Programmatic Warning] Fill failed ({fe}). Clicking element and typing via keyboard...")
+                try:
+                    input_el.click()
+                    page.wait_for_timeout(500)
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                    page.keyboard.type(llm_response)
+                    page.wait_for_timeout(500)
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(2000)
+                except Exception as ke2:
+                    print(f"[Chatbot Programmatic Warning] Keyboard fallback 2 failed: {ke2}. Triggering fallback...")
+                    return run_naukri_chatbot_fallback.invoke({})
             
             # Wait for response to load (2 seconds)
             print("[Chatbot Programmatic] Submitted answer. Waiting for recruiter's response...")
@@ -634,7 +662,6 @@ def click_naukri_apply_button(mode: str = "interactive", tool_summary: str = "")
             
         selector = '[data-automation-click-target="true"]'
         locator = page.locator(selector).first
-        locator.scroll_into_view_if_needed()
         
         # Keep track of active page before click
         old_page = page

@@ -1,8 +1,8 @@
-# Agent Execution Loops (naukri_agent_demo.py / indeed_agent_demo.py)
+# Agent Execution Loops (naukri_agent_demo.py / indeed_agent_demo.py / test_naukri_apply.py)
 
 ## Overview
 
-The browser agent scripts (`naukri_agent_demo.py` and `indeed_agent_demo.py`) implement the main agent execution loop. They orchestrate interaction between LLMs (Gemini/DeepSeek) and browser automation tools, incorporating:
+The browser agent scripts (`naukri_agent_demo.py`, `indeed_agent_demo.py`, and `test_naukri_apply.py`) implement the main agent execution loop. They orchestrate interaction between LLMs (Gemini/DeepSeek) and browser automation tools, incorporating:
 1. **Programmatic Pre-filtering & Tab Preparation** (to minimize LLM navigation work).
 2. **Stateful Scratchpad Memory** (to maintain compact structured state).
 3. **Tool Output Pruning** (to prevent message context bloat).
@@ -69,6 +69,14 @@ graph TD
     Next -->|No| Close["Close search listings page tab"]
     Close --> Handoff["Hand off remaining open tabs to LLM Agent"]
 ```
+
+## Programmatic Chatbot Interaction & Logging
+
+During the main agent loop, the script automatically checks for active recruiter chatbots:
+1. **Detection**: `GET_NAUKRI_CHATBOT_A11Y_JS` is evaluated dynamically.
+2. **Logging**: If a chatbot is active, the chat items (bot questions/statements) and UI elements are saved to `outputs/chatbot_tree.json`.
+3. **Grouping**: The logs are intelligently structured by evaluating the page to extract the current `"Job Title at Company Name"` as the grouping key.
+4. **Guidance**: The main LangChain agent receives a dynamically injected `SystemMessage` instructing it to use the `manage_naukri_chatbot` tool to securely answer the questions iteratively.
 
 ## Retry Logic Flow
 

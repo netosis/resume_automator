@@ -61,8 +61,9 @@ from browser_tools import (
     save_chat_transcript,
     fill_entire_form,
     PersistentBrowserManager,
-    move_mouse_to_coordinates,
-    update_agent_memory
+    update_agent_memory,
+    os_level_mouse_keyboard_action,
+    execute_human_pyautogui_action
 )
 from naukri_tools import (
     naukri_job_fetch,
@@ -243,7 +244,8 @@ def run_browser_agent(prompt: str):
         go_back,
         fill_entire_form,
         manage_naukri_popup_question,
-        manage_naukri_chatbot
+        manage_naukri_chatbot,
+        os_level_mouse_keyboard_action
     ]
 
     # Bind tools to the model
@@ -268,7 +270,7 @@ def run_browser_agent(prompt: str):
     sanitized_title = job_role.lower().strip()
     sanitized_title = re.sub(r'[^a-z0-9]+', '-', sanitized_title)
     sanitized_title = sanitized_title.strip('-')
-    search_url = f"https://www.naukri.com/{sanitized_title}-jobs"
+    search_url = f"https://www.naukri.com/{sanitized_title}-jobs-2"
     
     manager = PersistentBrowserManager.get_instance()
     page = manager.get_page()
@@ -347,7 +349,7 @@ def run_browser_agent(prompt: str):
         _TOKEN_TRACKER["messages"] = full_messages
         session_id = async_logger.get_session_id()
 
-        max_steps = 25
+        max_steps = 40
         last_response_content = None
         applied_successfully = False
 
@@ -481,6 +483,44 @@ def run_browser_agent(prompt: str):
 
             if response.content:
                 print(f"\n  [Agent Thoughts]:\n{response.content}\n")
+
+            # Fallback for DeepSeek tool call parsing when response.tool_calls is empty
+            if not response.tool_calls and response.content:
+                content_str = response.content
+                if isinstance(content_str, list):
+                    content_str = "\n".join([item["text"] for item in content_str if isinstance(item, dict) and "text" in item] + [item for item in content_str if isinstance(item, str)])
+                
+                has_ds_marker = "</｜｜DSML｜｜tool_calls>" in content_str or "<｜tool_calls｜>" in content_str
+                
+                # If DeepSeek marker is present, or if model mentions a tool but langchain failed to parse
+                if has_ds_marker or "manage_naukri_chatbot" in content_str or "manage_naukri_popup_question" in content_str:
+                    print("  [DeepSeek Fallback Parser] Detected unparsed tool call in response content. Attempting manual extraction...")
+                    
+                    # Clean up the DSML token from content to keep thoughts clean
+                    response.content = content_str.replace("</｜｜DSML｜｜tool_calls>", "").replace("<｜tool_calls｜>", "").strip()
+                    
+                    # Determine which tool was intended
+                    detected_tool = None
+                    for t_name in ["manage_naukri_chatbot", "manage_naukri_popup_question"]:
+                        if t_name in content_str:
+                            detected_tool = t_name
+                            break
+                    if not detected_tool:
+                        for t in tools:
+                            if t.name in content_str:
+                                detected_tool = t.name
+                                break
+                                
+                    if detected_tool:
+                        # Construct a synthetic tool call
+                        synthetic_tool_call = {
+                            "name": detected_tool,
+                            "args": {"tool_summary": f"Fallback parse: handling active chatbot/popup via {detected_tool}"},
+                            "id": f"fallback_call_{int(time.time())}"
+                        }
+                        # Populate response.tool_calls
+                        response.tool_calls = [synthetic_tool_call]
+                        print(f"  [DeepSeek Fallback Parser] Successfully extracted synthetic tool call: {synthetic_tool_call}")
 
             if not response.tool_calls:
                 # Check state_summary or thoughts for applied success
@@ -670,7 +710,8 @@ def run_browser_agent(prompt: str):
 
     applied_count = 0
     opened_count = 0
-    max_jobs_to_open = random.randint(5, 7)
+    # max_jobs_to_open = random.randint(5, 7)
+    max_jobs_to_open = 10
     print(f"[Naukri Agent] Target: Open {max_jobs_to_open} jobs in total and apply to those that are direct.")
     
     # Loop through cards and click titles to open in new tabs
@@ -706,17 +747,17 @@ def run_browser_agent(prompt: str):
             # Click using slow cursor movements
             box = title_link.bounding_box()
             if box:
-                x = box['x'] + box['width'] / 2
-                y = box['y'] + box['height'] / 2
+                scroll_x = page.evaluate("window.scrollX")
+                scroll_y = page.evaluate("window.scrollY")
                 
-                # Move cursor slowly to coordinates
-                print(f"[Naukri Prep] Moving mouse slowly to ({x:.1f}, {y:.1f})...")
-                move_mouse_to_coordinates(page, x, y)
-                page.wait_for_timeout(random.randint(150, 300)) # Human-like pause before click
+                viewport_x = box['x'] + box['width'] / 2 - scroll_x
+                viewport_y = box['y'] + box['height'] / 2 - scroll_y
                 
-                # Click using mouse API
+                print(f"[Naukri Prep] Moving mouse slowly to ({viewport_x:.1f}, {viewport_y:.1f}) and clicking...")
+                
+                # Click using PyAutoGUI
                 with page.context.expect_page(timeout=15000) as new_page_info:
-                    page.mouse.click(x, y)
+                    execute_human_pyautogui_action(page, "move_and_click", x=viewport_x, y=viewport_y)
                 new_page = new_page_info.value
             else:
                 # Fallback to standard locator click
@@ -881,7 +922,7 @@ if __name__ == "__main__":
         "Search for 'AI Engineer' jobs on naukri.com using the direct URL modification tool. "
         "Find and open 5 to 7 jobs, then apply to the ones that can be applied directly on naukri. "
         "For each job, open the job listing, click the 'Apply' button. If any chatbot / recruiter popups or drawer questions show up, "
-        "use 'manage_naukri_chatbot' or 'manage_naukri_popup_question' to detect and answer them iteratively until completed. "
+        "use 'manage_naukri_chatbot' to detect and answer them iteratively until completed. "
 
         "If a new tab opens, handle the application, close the tab, and return to the main tab. "
         "Keep the browser open when complete."

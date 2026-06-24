@@ -29,7 +29,8 @@ from browser_tools import (
     get_compressed_dom,
     save_chat_transcript,
     fill_entire_form,
-    update_agent_memory
+    update_agent_memory,
+    os_level_mouse_keyboard_action
 )
 
 # Configure Stream Encoding for Windows
@@ -340,7 +341,8 @@ def run_workday_agent(resume_path: str, target_url: str = None):
         generate_fill_values,
         close_browser_session,
         get_compressed_dom,
-        fill_entire_form
+        fill_entire_form,
+        os_level_mouse_keyboard_action
     ]
 
     model_with_tools = model.bind_tools(tools)

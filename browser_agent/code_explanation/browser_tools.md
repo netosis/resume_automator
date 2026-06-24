@@ -34,6 +34,7 @@ graph TB
         SelectDropdown["select_dropdown_option()"]
         SetCheckbox["set_checkbox_state()"]
         UploadFile["upload_file()"]
+        AdjustSpinner["adjust_spinner_value()"]
     end
     
     subgraph InfoTools["Information Extraction"]
@@ -48,6 +49,9 @@ graph TB
         FetchJobDetails["fetch_job_details()"]
         NaukriFetch["naukri_job_fetch()"]
         ClickApply["click_apply_button()"]
+        ManagePopup["manage_naukri_popup_question()"]
+        ManageChatbot["manage_naukri_chatbot()"]
+        ChatbotFallback["run_naukri_chatbot_fallback()"]
     end
     
     Manager --> GetPage
@@ -106,6 +110,7 @@ sequenceDiagram
 - **`select_dropdown_option(selector, option_value_or_text, mode)`**: Selects dropdown option
 - **`set_checkbox_state(selector, checked, mode)`**: Checks/unchecks checkboxes
 - **`upload_file(selector, file_path, mode)`**: Uploads files via file input
+- **`adjust_spinner_value(selector, target_value, increment_selector, decrement_selector, mode)`**: Clicks increment/decrement buttons iteratively to reach a target numeric value with safety limits.
 
 ### 3. Information Extraction Tools
 - **`get_page_text()`**: Returns full page text (truncated to 3000 chars)
@@ -124,6 +129,19 @@ sequenceDiagram
 - **`click_apply_button(mode)`**: Automatically finds and clicks "Apply" buttons
   - Handles tab switching
   - Works with multiple button variations
+  
+- **`manage_naukri_popup_question()`**: Automatically detects and answers recruiter popup modals
+  - Uses candidate_info.json context
+  - Detects save/submit actions
+
+- **`manage_naukri_chatbot()`**: Fully autonomous loop for interacting with the Naukri recruiter chatbot
+  - Iteratively answers questions
+  - Extracts active chat history from the drawer
+  - Logs outputs and handles delays
+
+- **`run_naukri_chatbot_fallback()`**: Multimodal visual fallback for the chatbot
+  - Takes a screenshot and marks bounding box coordinates
+  - Returns a detailed textual summary to the main agent loop when finished
 
 ### 5. Utility Tools
 - **`close_browser_session()`**: Closes browser (rarely used)
