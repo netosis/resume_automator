@@ -62,9 +62,9 @@ from browser_tools import (
     fill_entire_form,
     PersistentBrowserManager,
     update_agent_memory,
-    os_level_mouse_keyboard_action,
-    execute_human_pyautogui_action
+    os_level_mouse_keyboard_action
 )
+from pyautogui_manager import PyAutoGUIManager
 from naukri_tools import (
     naukri_job_fetch,
     search_naukri_via_url,
@@ -270,10 +270,14 @@ def run_browser_agent(prompt: str):
     sanitized_title = job_role.lower().strip()
     sanitized_title = re.sub(r'[^a-z0-9]+', '-', sanitized_title)
     sanitized_title = sanitized_title.strip('-')
-    search_url = f"https://www.naukri.com/{sanitized_title}-jobs-2"
+    search_url = f"https://www.naukri.com/{sanitized_title}-jobs-4"
     
     manager = PersistentBrowserManager.get_instance()
     page = manager.get_page()
+    
+    print("[Naukri Prep] Initializing browser flow by navigating to Google first...")
+    page.goto("https://www.google.com", wait_until="load")
+    page.wait_for_timeout(random.randint(1500, 2500))
     
     print(f"[Naukri Prep] Navigating to: {search_url}")
     page.goto(search_url, wait_until="load")
@@ -747,17 +751,14 @@ def run_browser_agent(prompt: str):
             # Click using slow cursor movements
             box = title_link.bounding_box()
             if box:
-                scroll_x = page.evaluate("window.scrollX")
-                scroll_y = page.evaluate("window.scrollY")
-                
-                viewport_x = box['x'] + box['width'] / 2 - scroll_x
-                viewport_y = box['y'] + box['height'] / 2 - scroll_y
+                viewport_x = box['x'] + box['width'] / 2
+                viewport_y = box['y'] + box['height'] / 2
                 
                 print(f"[Naukri Prep] Moving mouse slowly to ({viewport_x:.1f}, {viewport_y:.1f}) and clicking...")
                 
                 # Click using PyAutoGUI
                 with page.context.expect_page(timeout=15000) as new_page_info:
-                    execute_human_pyautogui_action(page, "move_and_click", x=viewport_x, y=viewport_y)
+                    PyAutoGUIManager.get_instance().move_and_click(page, viewport_x, viewport_y)
                 new_page = new_page_info.value
             else:
                 # Fallback to standard locator click

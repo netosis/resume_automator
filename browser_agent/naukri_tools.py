@@ -13,9 +13,9 @@ from browser_tools import (
     PersistentBrowserManager,
     get_representation_header_and_body,
     clean_page_text,
-    move_mouse_to_element_and_click,
-    execute_human_pyautogui_action
+    move_mouse_to_element_and_click
 )
+from pyautogui_manager import PyAutoGUIManager
 from js_templates import (
     DETECT_NAUKRI_POPUP_JS,
     GET_NEXT_NAUKRI_POPUP_QUESTION_JS,
@@ -365,17 +365,17 @@ class NaukriChatbotFallback:
                     x = action.get("x")
                     y = action.get("y")
                     print(f"[Fallback Class Action] Moving PyAutoGUI mouse to viewport ({x}, {y}) and clicking...")
-                    execute_human_pyautogui_action(page, "move_and_click", x=x, y=y)
+                    PyAutoGUIManager.get_instance().move_and_click(page, x, y)
                     page.wait_for_timeout(random.randint(200, 500))
                 elif act_type == "keyboard_type":
                     txt = action.get("text")
                     print(f"[Fallback Class Action] PyAutoGUI Keyboard typing: '{txt}'...")
-                    execute_human_pyautogui_action(page, "type", text=txt)
+                    PyAutoGUIManager.get_instance().type_text(page, txt)
                     page.wait_for_timeout(random.randint(200, 500))
                 elif act_type == "keyboard_press":
                     key = action.get("key")
                     print(f"[Fallback Class Action] PyAutoGUI Pressing key: '{key}'...")
-                    execute_human_pyautogui_action(page, "press", key=key)
+                    PyAutoGUIManager.get_instance().press_key(page, key)
                     page.wait_for_timeout(random.randint(200, 500))
                 elif act_type == "wait":
                     sec = action.get("seconds", 1.0)
@@ -465,7 +465,11 @@ def manage_naukri_chatbot(tool_summary: str = "") -> str:
             page.wait_for_timeout(1000)
             
         if not chatbot_found:
-            print("[Chatbot Programmatic] Chatbot container not found via regex. Skipping fallback presence check.")
+            print("[Chatbot Programmatic] Chatbot container not found via regex. Checking for 'Applied' status...")
+            page_text = page.locator("body").inner_text()
+            if re.search(r'\b(Applied|Applied Successfully)\b', page_text, re.IGNORECASE) or "successfully applied" in page_text.lower() or "application submitted" in page_text.lower():
+                print("[Chatbot Programmatic] 'Applied' or confirmation text detected on page. Treating as successfully applied.")
+                return "Successfully completed chatbot questions. The job application has been successfully submitted."
             return "No active Naukri chatbot drawer (class='chatbot_MessageContainer') detected on the page."
             
         print("[Chatbot Programmatic] Chatbot detected. Starting autonomous response loop...")
