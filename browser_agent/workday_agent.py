@@ -30,7 +30,8 @@ from browser_tools import (
     save_chat_transcript,
     fill_entire_form,
     update_agent_memory,
-    os_level_mouse_keyboard_action
+    os_level_mouse_keyboard_action,
+    close_browser_on_interrupt
 )
 
 # Configure Stream Encoding for Windows
@@ -709,6 +710,7 @@ def run_workday_agent(resume_path: str, target_url: str = None):
             print(f"[Workday Agent Token Logger] Token usage logged to: {filename}")
         except Exception as e:
             print(f"[Workday Agent Token Logger Warning] Failed to save token log to file: {e}")
+        close_browser_on_interrupt()
         raise KeyboardInterrupt
     else:
         print("[Workday Agent Warning]: Reached maximum steps without completion.")

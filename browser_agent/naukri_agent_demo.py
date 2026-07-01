@@ -20,7 +20,8 @@ if sys.platform.startswith("win"):
 
 def invoke_model_with_retry(model, messages, max_retries=5, initial_delay=2.0):
     """
-    Invokes the model with exponential backoff retry for 429 (Rate Limit) and 503 (Service Unavailable) errors.
+    Invokes the model with exponential backoff retry for 429 (Rate Limit),
+    503 (Service Unavailable), and Ollama connection errors.
     """
     delay = initial_delay
     for attempt in range(max_retries):
@@ -30,8 +31,9 @@ def invoke_model_with_retry(model, messages, max_retries=5, initial_delay=2.0):
             err_msg = str(e)
             is_rate_limit = "429" in err_msg or "ResourceExhausted" in err_msg or "quota" in err_msg.lower()
             is_service_unavailable = "503" in err_msg or "ServiceUnavailable" in err_msg or "unavailable" in err_msg.lower()
+            is_ollama_conn_err = "Connection refused" in err_msg or "ConnectError" in err_msg or "connect error" in err_msg.lower()
             
-            if (is_rate_limit or is_service_unavailable) and attempt < max_retries - 1:
+            if (is_rate_limit or is_service_unavailable or is_ollama_conn_err) and attempt < max_retries - 1:
                 sleep_time = delay + random.uniform(0, 1.0)
                 print(f"\n[API Warning]: Encountered transient error ({type(e).__name__}: {err_msg}). Retrying in {sleep_time:.2f} seconds... (Attempt {attempt + 1}/{max_retries})")
                 time.sleep(sleep_time)
@@ -62,7 +64,8 @@ from browser_tools import (
     fill_entire_form,
     PersistentBrowserManager,
     update_agent_memory,
-    os_level_mouse_keyboard_action
+    os_level_mouse_keyboard_action,
+    close_browser_on_interrupt
 )
 from pyautogui_manager import PyAutoGUIManager
 from naukri_tools import (
@@ -191,6 +194,27 @@ def run_browser_agent(prompt: str):
             api_base=api_base,
             temperature=0.0
         )
+    elif provider == "ollama":
+        api_base = os.getenv("OLLAMA_API_BASE", os.getenv("LOCAL_API_BASE", "http://localhost:11434/v1"))
+        model_name = os.getenv("OLLAMA_MODEL", os.getenv("LOCAL_MODEL", "qwen2.5"))
+        api_key = os.getenv("OLLAMA_API_KEY", os.getenv("LOCAL_API_KEY", "local"))
+        soft_limit = int(os.getenv("OLLAMA_SOFT_TOKEN_LIMIT", "35000"))
+        hard_limit = int(os.getenv("OLLAMA_HARD_TOKEN_LIMIT", "50000"))
+
+        print(
+            f"Initializing OllamaChunkedModel model='{model_name}' at base='{api_base}' "
+            f"(soft_limit={soft_limit}, hard_limit={hard_limit})..."
+        )
+        from ollama_chunked_model import OllamaChunkedModel
+        model = OllamaChunkedModel(
+            model_name=model_name,
+            api_base=api_base,
+            api_key=api_key,
+            temperature=0.0,
+            soft_token_limit=soft_limit,
+            hard_token_limit=hard_limit,
+            verbose=True,
+        )
     elif provider == "local":
         api_base = os.getenv("LOCAL_API_BASE", "http://localhost:11434/v1")
         model_name = os.getenv("LOCAL_MODEL", "qwen2.5")
@@ -278,6 +302,14 @@ def run_browser_agent(prompt: str):
     print("[Naukri Prep] Initializing browser flow by navigating to Google first...")
     page.goto("https://www.google.com", wait_until="load")
     page.wait_for_timeout(random.randint(1500, 2500))
+    
+    # Calibrate PyAutoGUI screen coordinates via UI Automation.
+    # BraveInfoBarContainerView.bottom gives us the exact absolute Y pixel
+    # where the browser content area starts (below tabs, address bar, and any
+    # infobar such as the --no-sandbox warning). All subsequent move_and_click
+    # calls will use this offset instead of the less reliable JS-based fallback.
+    print("[Naukri Prep] Calibrating PyAutoGUI screen offsets via UI Automation...")
+    PyAutoGUIManager.get_instance().calibrate_browser_offsets()
     
     print(f"[Naukri Prep] Navigating to: {search_url}")
     page.goto(search_url, wait_until="load")
@@ -772,6 +804,10 @@ def run_browser_agent(prompt: str):
             opened_count += 1
             print(f"[Naukri Prep] Opened job {i+1} in new tab ({opened_count}/{max_jobs_to_open}): {new_url}")
             
+            # The infobar (--no-sandbox warning) only appears on the original search tab.
+            # New job tabs open without it, so the calibrated Y-offset must be cleared.
+            PyAutoGUIManager.get_instance().reset_calibration()
+            
             # Wait for content to settle
             new_page.wait_for_timeout(random.randint(1750, 2250))
             
@@ -792,6 +828,8 @@ def run_browser_agent(prompt: str):
                 # Switch back to search page to open the next one
                 search_page.bring_to_front()
                 manager.page = search_page
+                # Re-apply UIA calibration: the infobar is back on the search tab.
+                PyAutoGUIManager.get_instance().calibrate_browser_offsets()
             elif is_third_party:
                 print(f"[Naukri Prep] Job {i+1} is a THIRD-PARTY post (Button: '{third_party_btn}'). Logging and skipping.")
                 with open(skipped_file_path, "a", encoding="utf-8") as sf:
@@ -804,6 +842,8 @@ def run_browser_agent(prompt: str):
                 # Switch back to search page to open the next one
                 search_page.bring_to_front()
                 manager.page = search_page
+                # Re-apply UIA calibration: the infobar is back on the search tab.
+                PyAutoGUIManager.get_instance().calibrate_browser_offsets()
             else:
                 print(f"[Naukri Agent] Job {i+1} is direct & unapplied. Starting application now!")
                 manager.page = new_page
@@ -854,6 +894,8 @@ def run_browser_agent(prompt: str):
                 try:
                     search_page.bring_to_front()
                     manager.page = search_page
+                    # Re-apply UIA calibration: the infobar is back on the search tab.
+                    PyAutoGUIManager.get_instance().calibrate_browser_offsets()
                 except Exception:
                     pass
             
@@ -862,6 +904,8 @@ def run_browser_agent(prompt: str):
             try:
                 search_page.bring_to_front()
                 manager.page = search_page
+                # Ensure calibration is restored after any mid-job error.
+                PyAutoGUIManager.get_instance().calibrate_browser_offsets()
             except Exception:
                 pass
 
@@ -943,5 +987,6 @@ if __name__ == "__main__":
     try:
         run_browser_agent(prompt)
     except KeyboardInterrupt:
+        close_browser_on_interrupt()
         save_force_close_logs("naukri")
         sys.exit(0)

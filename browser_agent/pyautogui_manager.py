@@ -19,6 +19,75 @@ try:
 except ImportError:
     _PYGETWINDOW_AVAILABLE = False
 
+try:
+    import uiautomation as auto
+    _UIAUTOMATION_AVAILABLE = True
+except ImportError:
+    _UIAUTOMATION_AVAILABLE = False
+
+
+def _uia_dump_tree(control, depth=0, max_depth=8):
+    """
+    Lightweight UI Automation tree dump.
+    Filters out elements with all-zero bounding rectangles (hidden / not rendered).
+    """
+    if depth > max_depth:
+        return None
+    try:
+        rect = control.BoundingRectangle
+        if rect.left == 0 and rect.top == 0 and rect.right == 0 and rect.bottom == 0:
+            return None
+        rect_dict = {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
+    except Exception:
+        return None
+
+    node = {
+        "ClassName": control.ClassName,
+        "Rect": rect_dict,
+        "Children": []
+    }
+    try:
+        for child in control.GetChildren():
+            child_node = _uia_dump_tree(child, depth + 1, max_depth)
+            if child_node:
+                node["Children"].append(child_node)
+    except Exception:
+        pass
+    return node
+
+
+def _uia_find_by_classname(node, classname):
+    """Recursively search the tree dict for a node with the given ClassName."""
+    if not node:
+        return None
+    if node.get("ClassName") == classname:
+        return node
+    for child in node.get("Children", []):
+        result = _uia_find_by_classname(child, classname)
+        if result:
+            return result
+    return None
+
+
+def _uia_get_browser_window():
+    """Find and return the first Chromium browser window handle via UI Automation."""
+    if not _UIAUTOMATION_AVAILABLE:
+        return None
+    try:
+        auto.SetGlobalSearchTimeout(5)
+        desktop = auto.GetRootControl()
+        for _ in range(3):
+            for window in desktop.GetChildren():
+                try:
+                    if window.ClassName == "Chrome_WidgetWin_1":
+                        return window
+                except Exception:
+                    pass
+            time.sleep(0.5)
+    except Exception:
+        pass
+    return None
+
 
 class PyAutoGUIManager:
     """
@@ -32,6 +101,10 @@ class PyAutoGUIManager:
     def __init__(self):
         self.is_headless = os.environ.get("HEADLESS", "false").lower() == "true"
         self.available = _PYAUTOGUI_AVAILABLE and not self.is_headless
+        # UIA-calibrated absolute screen coordinates for the top-left of browser content.
+        # Set by calibrate_browser_offsets(); None means fall back to JS-based offset.
+        self._content_top: Optional[int] = None
+        self._content_left: int = 0
 
     @classmethod
     def get_instance(cls) -> 'PyAutoGUIManager':
@@ -88,6 +161,74 @@ class PyAutoGUIManager:
 
         return win.left, win.top
 
+    def calibrate_browser_offsets(self):
+        """
+        Use Windows UI Automation to determine the exact absolute screen
+        coordinates where the browser content area starts.
+
+        Primary reference: BraveInfoBarContainerView.bottom
+          The bottom edge of the infobar container is the exact pixel row
+          where rendered web content begins, accounting for the tab strip,
+          address bar, bookmarks bar, and any infobars (e.g. the --no-sandbox
+          warning) that shift the content area downward.
+
+        Fallback: Chrome_RenderWidgetHostHWND.top
+          If no infobar container is found, use the top of the render widget.
+
+        Stores results in self._content_left and self._content_top.
+        move_and_click() uses these values for precise coordinate conversion.
+        """
+        print("[PyAutoGUI] Calibrating browser content offsets via UI Automation...")
+        browser_win = _uia_get_browser_window()
+        if browser_win is None:
+            print("[PyAutoGUI] Warning: Could not find browser window via UIA. Calibration skipped.")
+            return
+
+        tree = _uia_dump_tree(browser_win, max_depth=8)
+        if not tree:
+            print("[PyAutoGUI] Warning: Could not dump UIA tree. Calibration skipped.")
+            return
+
+        # Primary: BraveInfoBarContainerView.bottom is the Y where content starts
+        infobar_node = _uia_find_by_classname(tree, "BraveInfoBarContainerView")
+        if infobar_node and infobar_node.get("Rect"):
+            rect = infobar_node["Rect"]
+            self._content_top = rect["bottom"]
+            self._content_left = rect["left"]
+            print(
+                f"[PyAutoGUI] Calibrated via BraveInfoBarContainerView: "
+                f"content starts at ({self._content_left}, {self._content_top})"
+            )
+            return
+
+        # Fallback: Chrome_RenderWidgetHostHWND.top is also the content top
+        render_node = _uia_find_by_classname(tree, "Chrome_RenderWidgetHostHWND")
+        if render_node and render_node.get("Rect"):
+            rect = render_node["Rect"]
+            self._content_top = rect["top"]
+            self._content_left = rect["left"]
+            print(
+                f"[PyAutoGUI] Calibrated via Chrome_RenderWidgetHostHWND: "
+                f"content starts at ({self._content_left}, {self._content_top})"
+            )
+            return
+
+        print("[PyAutoGUI] Warning: No reference element found for UIA calibration.")
+
+    def reset_calibration(self):
+        """
+        Clear UIA-based calibration so move_and_click() falls back to the
+        JS outerHeight/innerHeight offset method.
+
+        Call this when switching to a new tab where BraveInfoBarContainerView
+        is absent (e.g. a job listing tab opened from the Naukri search page).
+        The infobar warning only appears on the first/original tab; new tabs
+        have a shorter chrome height so the infobar offset must not be applied.
+        """
+        self._content_top = None
+        self._content_left = 0
+        print("[PyAutoGUI] UIA calibration reset — falling back to JS-based coordinate offset.")
+
     def move_and_click(self, page: Page, x: float, y: float):
         if not self.available:
             print("[PyAutoGUI] Library not available or browser is headless. Falling back to Playwright native interactions.")
@@ -95,12 +236,17 @@ class PyAutoGUIManager:
             page.mouse.click(x, y)
             return
 
-        # Convert viewport coordinates to absolute monitor coordinates using requested logic
-        win_x, win_y = self.get_browser_window_origin(page)
-        chrome_x, chrome_y = self.get_chrome_offset(page)
-
-        end_x = int(win_x + chrome_x + x)
-        end_y = int(win_y + chrome_y + y)
+        # --- Coordinate conversion: viewport → absolute screen ---
+        # If UIA calibration has been run, use the precise content offsets.
+        # Otherwise fall back to the JS outerHeight/innerHeight approach.
+        if self._content_top is not None:
+            end_x = int(self._content_left + x)
+            end_y = int(self._content_top + y)
+        else:
+            win_x, win_y = self.get_browser_window_origin(page)
+            chrome_x, chrome_y = self.get_chrome_offset(page)
+            end_x = int(win_x + chrome_x + x)
+            end_y = int(win_y + chrome_y + y)
         
         start_x, start_y = pyautogui.position()
         dx = end_x - start_x

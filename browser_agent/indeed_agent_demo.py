@@ -59,7 +59,8 @@ from browser_tools import (
     fill_entire_form,
     PersistentBrowserManager,
     update_agent_memory,
-    os_level_mouse_keyboard_action
+    os_level_mouse_keyboard_action,
+    close_browser_on_interrupt
 )
 from indeed_tools import (
     search_indeed_via_url,
@@ -599,5 +600,6 @@ if __name__ == "__main__":
     try:
         run_browser_agent(prompt)
     except KeyboardInterrupt:
+        close_browser_on_interrupt()
         save_force_close_logs("indeed")
         sys.exit(0)

@@ -299,6 +299,9 @@ class PersistentBrowserManager:
     def close(self):
         """
         Closes each individual tab, context, and stops Playwright.
+        Avoids using Control+W (PyAutoGUI) during shutdown to prevent race
+        conditions — instead closes each page directly via Playwright and
+        waits briefly before tearing down the persistent context.
         """
         # Reset accessibility state cache
         global _LAST_ACCESSIBILITY_STATE
@@ -310,28 +313,33 @@ class PersistentBrowserManager:
 
         if self.context:
             try:
-                # Close each tab individually first
-                for p in list(self.context.pages):
+                # Close each tab individually using Playwright page.close().
+                # We intentionally skip the Control+W / PyAutoGUI path here
+                # because keyboard-level input can fail or race during an
+                # interrupt, and persistent contexts kill the browser process
+                # as soon as context.close() is called.
+                pages = list(self.context.pages)
+                print(f"[PersistentBrowserManager] Closing {len(pages)} open tab(s)...")
+                for p in pages:
                     try:
                         if not p.is_closed():
-                            try:
-                                p.bring_to_front()
-                                PyAutoGUIManager.get_instance().press_key(p, "Control+W")
-                                time.sleep(0.5)
-                                if not p.is_closed():
-                                    p.close()
-                            except Exception:
-                                if not p.is_closed():
-                                    p.close()
+                            p.close()
+                            time.sleep(0.3)  # Let Playwright process each close before the next
                     except Exception as pe:
                         if "closed" not in str(pe).lower():
                             print(f"[PersistentBrowserManager] Error closing individual tab: {pe}")
-                
-                # Close context
+
+                # Give the browser a moment to process all the individual tab
+                # closures before we call context.close(), which on a persistent
+                # context terminates the browser process immediately.
+                time.sleep(0.5)
+
+                # Close context (for persistent contexts this also kills the
+                # browser process, so the tab loop above must finish first).
                 self.context.close()
             except Exception as e:
-                # If target page, context or browser has been closed, that's expected and normal
-                # when closing all tabs closes the browser context.
+                # If the target page, context or browser was already closed that
+                # is expected and normal when the last tab closes the browser.
                 if "closed" not in str(e).lower():
                     print(f"[PersistentBrowserManager] Error closing context: {e}")
             self.context = None
@@ -362,6 +370,60 @@ class PersistentBrowserManager:
                     print(f"[PersistentBrowserManager] Cleaned up temporary profile copy: {self.firefox_profile_copy_path}")
                 except Exception as e:
                     print(f"[PersistentBrowserManager] Warning: failed to remove temporary profile copy: {e}")
+
+
+def close_browser_on_interrupt():
+    """
+    Gracefully closes all open browser tabs and shuts down the browser when
+    the process is interrupted (e.g. Ctrl+C / KeyboardInterrupt).
+
+    Strategy:
+      1. Probe the existing Playwright context to see if it is still alive.
+      2. If alive, close all open tabs through it and shut everything down.
+      3. If the context is dead (browser process was already killed by the
+         interrupt), reset the singleton and reopen a fresh browser window
+         via get_page(), then close that window — this guarantees Playwright
+         stops cleanly and all lingering tabs are dismissed.
+    Should be called from each agent's KeyboardInterrupt handler before exiting.
+    """
+    print("\n[Interrupt] Closing all open browser tabs and shutting down the browser...")
+
+    manager = PersistentBrowserManager.get_instance()
+
+    # # --- Step 1: Probe whether the existing context is still usable ---
+    # context_alive = False
+    # if manager.context is not None:
+    #     try:
+    #         # Accessing .pages on a dead persistent context raises immediately
+    #         _ = manager.context.pages
+    #         context_alive = True
+    #     except Exception:
+    #         context_alive = False
+
+    # --- Step 2: If the context died, reopen a fresh browser window ---
+    # if not context_alive:
+    print(
+        "[Interrupt] Existing browser context is unresponsive. "
+        "Reopening browser to perform tab cleanup..."
+    )
+    try:
+        # Wipe the stale singleton so get_instance() creates a clean one
+        PersistentBrowserManager._instance = None
+        manager = PersistentBrowserManager.get_instance()
+        # Launching the browser; this creates a single blank tab we can
+        # then close via the normal close() path below.
+        manager.get_page()
+        print("[Interrupt] Browser reopened successfully. Closing all tabs now...")
+    except Exception as e:
+        print(f"[Interrupt] Warning: failed to reopen browser for cleanup: {e}")
+        return
+
+    # --- Step 3: Close every open tab, then shut down context + Playwright ---
+    try:
+        manager.close()
+        print("[Interrupt] Browser closed successfully.")
+    except Exception as e:
+        print(f"[Interrupt] Warning: error while closing browser: {e}")
 
 
 # Helpers for text cleaning

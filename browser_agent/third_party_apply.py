@@ -38,7 +38,8 @@ from browser_tools import (
     fill_entire_form,
     update_agent_memory,
     adjust_spinner_value,
-    os_level_mouse_keyboard_action
+    os_level_mouse_keyboard_action,
+    close_browser_on_interrupt
 )
 from naukri_tools import (
     naukri_job_fetch,
@@ -1014,6 +1015,7 @@ def run_apply_agent(target_url: str, resume_path: str):
             print(f"[Apply Agent Token Logger] Dedicated LLM call token usage logged to: {llm_log_filename}")
         except Exception as e:
             print(f"[Apply Agent Token Logger Warning] Failed to save token log to file: {e}")
+        close_browser_on_interrupt()
         raise KeyboardInterrupt
 
     # Write log file containing LLM call token usage
