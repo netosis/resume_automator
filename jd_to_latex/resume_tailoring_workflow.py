@@ -16,6 +16,13 @@ from jd_latex_modifier_system_prompt import (
 
 LOGGER = logging.getLogger(__name__)
 
+# Try to import log_api_call from browser_agent
+try:
+    sys.path.append(str(Path(__file__).parent.parent.resolve() / "browser_agent"))
+    from browser_tools import log_api_call
+except Exception:
+    log_api_call = None
+
 DEFAULT_LATEX_PATH = "generated_latex/My_resume.tex"
 DEFAULT_JD_PATH = "jd_to_latex/job_description.txt"
 DEFAULT_OUTPUT_DIR = "generated_latex"
@@ -224,6 +231,18 @@ class ResumeTailoringAgent:
 				api_base=api_base,
 				temperature=0.0
 			)
+		elif provider == "local":
+			model_name = model if ("gemini" not in model.lower() and "deepseek" not in model.lower()) else (os.getenv("LOCAL_MODEL") or "qwen2.5")
+			resolved_api_key = resolve_api_key(api_key, provider="local")
+			api_base = os.getenv("LOCAL_API_BASE") or "http://localhost:11434/v1"
+			
+			from langchain_openai import ChatOpenAI
+			self.llm = ChatOpenAI(
+				model=model_name,
+				api_key=resolved_api_key,
+				base_url=api_base,
+				temperature=0.0
+			)
 		else:
 			model_name = model
 			resolved_api_key = resolve_api_key(api_key, provider="google")
@@ -280,6 +299,19 @@ class ResumeTailoringAgent:
 					self.iteration_counter,
 					phase,
 				)
+
+			# Log to unified session log
+			if log_api_call:
+				try:
+					log_api_call(
+						caller_name=f"resume_tailoring_workflow:{phase}",
+						model_name=model_display_name,
+						input_tokens=input_tokens or 0,
+						output_tokens=output_tokens or 0
+					)
+				except Exception as e:
+					LOGGER.warning(f"Failed to log API call to session: {e}")
+
 			return response, record
 		except Exception as e:
 			LOGGER.error(f"Error invoking LLM during phase '{phase}': {e}")
@@ -361,7 +393,9 @@ def resolve_api_key(api_key: str | None = None, provider: str = "google") -> str
 
 	load_env_file()
 
-	if provider == "deepseek":
+	if provider == "local":
+		return os.getenv("LOCAL_API_KEY") or "local"
+	elif provider == "deepseek":
 		env_api_key = os.getenv("DEEPSEEK_API_KEY")
 		if env_api_key:
 			return env_api_key
